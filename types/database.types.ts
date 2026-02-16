@@ -204,6 +204,8 @@ export type Database = {
           id: string
           nome: string | null
           role: string | null
+          password: string
+          permissions: Json | null
         }
         Insert: {
           assigned_account_ids?: string[] | null
@@ -214,6 +216,8 @@ export type Database = {
           id?: string
           nome?: string | null
           role?: string | null
+          password?: string
+          permissions?: Json | null
         }
         Update: {
           assigned_account_ids?: string[] | null
@@ -224,6 +228,8 @@ export type Database = {
           id?: string
           nome?: string | null
           role?: string | null
+          password?: string
+          permissions?: Json | null
         }
         Relationships: []
       }
@@ -604,29 +610,36 @@ export type Database = {
       }
       get_summary_report: {
         Args: {
-          p_start_date: string
-          p_end_date: string
-          p_franchise_filter?: string[]
-          p_account_filter?: string[]
+          period_start: string
+          period_end: string
+          account_filter?: string
+          campaign_filter?: string
         }
         Returns: {
-          franchise_name: string
-          account_id: string
+          account_id: number
           account_name: string
-          status_interno: string
-          client_visibility: boolean
-          current_balance: number
-          spend: number
+          campaign_name: string
+          campaign_id: string
+          investimento: number
           impressoes: number
-          clicks: number
-          alcance: number
-          compras: number
-          msgs_iniciadas: number
-          cpl: number
-          ctr: number
+          cliques: number
           cpc: number
-          total_gasto: number
+          ctr: number
+          cpm: number
+          leads: number
+          custo_por_lead: number
+          compras: number
+          custo_por_compra: number
+          vendas: number
+          roas: number
         }[]
+      }
+      manage_users: {
+        Args: {
+          operation: 'create' | 'update' | 'delete' | 'reset_password'
+          payload: Json
+        }
+        Returns: Json
       }
     }
     Enums: {

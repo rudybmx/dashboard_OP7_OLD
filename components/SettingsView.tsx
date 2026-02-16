@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BMSettingsTab } from './BMSettingsTab';
-import { FranchiseSettingsTab } from './FranchiseSettingsTab';
+
 import { UsersSettingsTab } from './UsersSettingsTab';
 import { CategoriesSettingsTab } from './CategoriesSettingsTab';
 import { PlanningTableView } from './PlanningTableView';
@@ -43,18 +43,7 @@ export const SettingsView: React.FC<{ userRole?: string }> = ({ userRole }) => {
                             Contas de Anúncio
                         </button>
 
-                        <button
-                            onClick={() => setActiveTab('franchises')}
-                            className={`
-                                pb-4 text-sm font-medium flex items-center gap-2 border-b-2 transition-all
-                                ${activeTab === 'franchises'
-                                    ? 'border-indigo-600 text-indigo-600'
-                                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}
-                            `}
-                        >
-                            <Store size={18} />
-                            Gerenciar Franqueados
-                        </button>
+
 
                         <button
                             onClick={() => setActiveTab('categories')}
@@ -91,9 +80,7 @@ export const SettingsView: React.FC<{ userRole?: string }> = ({ userRole }) => {
                     <div style={{ display: activeTab === 'accounts' ? 'block' : 'none' }}>
                         <BMSettingsTab />
                     </div>
-                    <div style={{ display: activeTab === 'franchises' ? 'block' : 'none' }}>
-                        <FranchiseSettingsTab />
-                    </div>
+
                     <div style={{ display: activeTab === 'categories' ? 'block' : 'none' }}>
                         <CategoriesSettingsTab />
                     </div>

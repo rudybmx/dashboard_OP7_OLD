@@ -4,83 +4,106 @@ import { UserProfile, UserFormData } from '../types';
 const TABLE_USERS = 'perfil_acesso';
 
 export const fetchUsers = async (): Promise<UserProfile[]> => {
-    const { data, error } = await supabase
-        .from(TABLE_USERS)
-        .select('id, email, name:nome, role, assigned_franchise_ids, assigned_account_ids, created_at')
-        .order('created_at', { ascending: false });
+  const { data, error } = await supabase
+    .from(TABLE_USERS)
+    .select('id, email, nome, role, assigned_account_ids, created_at')
+    .order('created_at', { ascending: false });
 
-    if (error) {
-        console.error('Error fetching users:', error);
-        return [];
-    }
-    return data as unknown as UserProfile[];
+  if (error) {
+    console.error('Error fetching users:', error);
+    return [];
+  }
+
+  return (data || []).map(row => ({
+    id: row.id,
+    email: row.email,
+    name: row.nome,
+    role: row.role,
+    assigned_account_ids: row.assigned_account_ids || [],
+    created_at: row.created_at,
+  })) as UserProfile[];
 };
 
 export const createUser = async (userData: UserFormData): Promise<UserProfile | null> => {
-    // Call the Secure RPC that handles Auth + Profile creation atomically
-    const { data: rpcData, error: rpcError } = await (supabase.rpc as any)('create_platform_user', {
-        p_email: userData.email,
-        p_password: userData.password || 'Mudar123!', 
-        p_name: userData.name,
-        p_role: userData.role,
-        p_franchise_ids: userData.assigned_franchise_ids || [],
-        p_account_ids: userData.assigned_account_ids || []
-    });
+  const payload = {
+    email: userData.email,
+    nome: userData.name,
+    role: userData.role,              // 'admin' ou 'client'
+    password: userData.password,      // texto simples, você controla
+    assigned_account_ids: userData.assigned_account_ids || [],
+  };
 
-    if (rpcError) {
-        console.error("RPC Create User Failed:", rpcError);
-        throw new Error(rpcError.message);
-    }
+  const { data, error } = await supabase
+    .from(TABLE_USERS)
+    .insert(payload)
+    .select('id, email, nome, role, assigned_account_ids, created_at')
+    .single();
 
-    return {
-        id: rpcData.id,
-        email: userData.email,
-        name: userData.name,
-        role: userData.role,
-        assigned_franchise_ids: userData.assigned_franchise_ids,
-        assigned_account_ids: userData.assigned_account_ids,
-        created_at: new Date().toISOString()
-    } as UserProfile;
+  if (error) {
+    console.error('Error creating user:', error);
+    throw new Error(error.message || 'Erro ao criar usuário.');
+  }
+
+  return {
+    id: data.id,
+    email: data.email,
+    name: data.nome,
+    role: data.role,
+    assigned_account_ids: data.assigned_account_ids || [],
+    created_at: data.created_at,
+  } as UserProfile;
 };
 
 export const updateUser = async (id: string, updates: Partial<UserFormData>): Promise<UserProfile | null> => {
-    const { data: rpcData, error: rpcError } = await (supabase.rpc as any)('update_platform_user', {
-        p_user_id: id,
-        p_nome: updates.name || '',
-        p_role: updates.role || 'client',
-        p_franchises: updates.assigned_franchise_ids || [],
-        p_account_ids: updates.assigned_account_ids || []
-    });
+  const payload: any = {
+    nome: updates.name,
+    role: updates.role,
+    assigned_account_ids: updates.assigned_account_ids || [],
+  };
 
-    if (rpcError) {
-        console.error('Error updating user (RPC):', rpcError);
-        throw rpcError;
-    }
+  const { data, error } = await supabase
+    .from(TABLE_USERS)
+    .update(payload)
+    .eq('id', id)
+    .select('id, email, nome, role, assigned_account_ids, created_at')
+    .single();
 
-    return rpcData as unknown as UserProfile;
+  if (error) {
+    console.error('Error updating user:', error);
+    throw new Error(error.message || 'Erro ao atualizar usuário.');
+  }
+
+  return {
+    id: data.id,
+    email: data.email,
+    name: data.nome,
+    role: data.role,
+    assigned_account_ids: data.assigned_account_ids || [],
+    created_at: data.created_at,
+  } as UserProfile;
 };
 
 export const deleteUser = async (id: string) => {
-    // Securely delete from Auth and Public tables via RPC
-    const { error } = await (supabase.rpc as any)('delete_platform_user', {
-        p_user_id: id
-    });
+  const { error } = await supabase
+    .from(TABLE_USERS)
+    .delete()
+    .eq('id', id);
 
-    if (error) {
-        console.error("Error deleting user (RPC):", error);
-        throw error;
-    }
+  if (error) {
+    console.error('Error deleting user:', error);
+    throw new Error(error.message || 'Erro ao excluir usuário.');
+  }
 };
 
 export const resetUserPassword = async (userId: string, newPassword: string) => {
-    const { data, error } = await (supabase.rpc as any)('reset_platform_user_password', {
-        p_user_id: userId,
-        p_new_password: newPassword
-    });
+  const { error } = await supabase
+    .from(TABLE_USERS)
+    .update({ password: newPassword })
+    .eq('id', userId);
 
-    if (error) {
-        console.error("Falha ao redefinir senha (RPC):", error);
-        throw new Error(error.message || "Falha ao redefinir senha.");
-    }
-    return data;
+  if (error) {
+    console.error('Falha ao redefinir senha:', error);
+    throw new Error(error.message || 'Falha ao redefinir senha.');
+  }
+  return true;
 };

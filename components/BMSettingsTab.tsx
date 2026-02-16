@@ -170,41 +170,7 @@ const BMSettingsTabComponent: React.FC = () => {
                 );
             }
         },
-        {
-            header: 'Vínculo',
-            accessorKey: 'franchise_id',
-            cell: ({ row, table }) => {
-                const meta = table.options.meta as any;
-                const pendingUpdates = meta?.pendingUpdates || {};
-                const handleLocalChange = meta?.handleLocalChange;
 
-                const val = (pendingUpdates[row.original.id] && pendingUpdates[row.original.id].franchise_id !== undefined)
-                    ? pendingUpdates[row.original.id].franchise_id
-                    : (row.original.franchise_id || '');
-
-                return (
-                    <div className="relative w-[180px]">
-                        <select
-                            className={`
-                        appearance-none w-full bg-slate-50 border text-slate-700 py-1 pl-2 pr-6 rounded-md text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all
-                        ${!val ? 'text-slate-400 italic' : ''}
-                        ${pendingUpdates[row.original.id]?.franchise_id !== undefined ? 'border-amber-400 bg-amber-50' : 'border-slate-200'}
-                    `}
-                            value={val as string}
-                            onChange={(e) => handleLocalChange(row.original.id, 'franchise_id', e.target.value || null)}
-                        >
-                            <option value="">-- Vincular --</option>
-                            {franchises.map((f: any) => (
-                                f ? <option key={f.id} value={f.name}>{f.name}</option> : null
-                            ))}
-                        </select>
-                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-1 text-slate-500">
-                            <LinkIcon size={12} />
-                        </div>
-                    </div>
-                )
-            }
-        },
         {
             header: 'Categoria',
             accessorKey: 'categoria_id',

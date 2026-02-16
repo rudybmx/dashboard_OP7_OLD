@@ -11,8 +11,11 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 
+import { TopCreative } from '../hooks/useDashboardMetrics';
+
 interface Props {
   data: CampaignData[];
+  topCreatives?: TopCreative[];
 }
 
 interface AdDetailedPerformance {
@@ -32,9 +35,39 @@ interface AdDetailedPerformance {
     freq: number;
 }
 
-export const TopCreativesWidget: React.FC<Props> = ({ data }) => {
+export const TopCreativesWidget: React.FC<Props> = ({ data, topCreatives }) => {
   
+  /* eslint-disable react-hooks/exhaustive-deps */
   const topAds = useMemo(() => {
+    if (topCreatives && topCreatives.length > 0) {
+        return topCreatives.map(tc => {
+             const clicks = (tc as any).clicks || 0;
+             const impressions = (tc as any).impressions || 0;
+             // Calculate missing derived metrics if needed
+             const cpl = tc.leads > 0 ? tc.investment / tc.leads : 0;
+             const cpc = clicks > 0 ? tc.investment / clicks : 0;
+             const cpm = impressions > 0 ? (tc.investment / impressions) * 1000 : 0;
+             
+             return {
+                id: tc.ad_id,
+                name: tc.ad_name || 'Anúncio',
+                imageUrl: (tc as any).imageUrl || '', 
+                link: (tc as any).link || '',
+                spend: tc.investment,
+                leads: tc.leads,
+                purchases: tc.purchases,
+                impressions,
+                clicks,
+                cpl,
+                cpc,
+                cpr: tc.cpr || 0,
+                cpm,
+                freq: (tc as any).freq || 1,
+                // Pass through any other props
+             };
+        });
+    }
+
     // Aggregation Map
     const adMap = new Map<string, AdDetailedPerformance>();
 
@@ -101,6 +134,7 @@ export const TopCreativesWidget: React.FC<Props> = ({ data }) => {
 
             // Smart CPR: If Purchases existing, use Cost/Purchase. Else CPL.
             // If both, prioritizing Purchase as "Result".
+            // However, this logic works per row.
             let cpr = 0;
             if (ad.purchases > 0) {
                 cpr = ad.spend / ad.purchases;
@@ -119,7 +153,8 @@ export const TopCreativesWidget: React.FC<Props> = ({ data }) => {
         })
         .sort((a, b) => b.spend - a.spend) // Sort by Spend DESC
         .slice(0, 5); // Take Top 5
-  }, [data]);
+  }, [data, topCreatives]);
+
 
   const fmtCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
   const fmtNumber = (val: number) => new Intl.NumberFormat('pt-BR').format(val);

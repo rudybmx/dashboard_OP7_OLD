@@ -105,14 +105,13 @@ export interface MetaAdAccount {
 }
 
 // User Management Types
-export type UserRole = 'admin' | 'executive' | 'multifranqueado' | 'franqueado' | 'client';
+export type UserRole = 'admin' | 'client';
 
 export interface UserProfile {
   id: string;
   email: string;
   name: string;
   role: UserRole;
-  assigned_franchise_ids: string[]; // IDs das franquias permitidas
   assigned_account_ids: string[];   // IDs das contas permitidas
   created_at: string;
 }
@@ -123,7 +122,6 @@ export interface UserFormData {
   email: string;
   password?: string; // Apenas para criação (não persistido no profile)
   role: UserRole;
-  assigned_franchise_ids: string[];
   assigned_account_ids: string[];
 }
 

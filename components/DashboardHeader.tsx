@@ -8,8 +8,6 @@ import { subDays, startOfMonth } from 'date-fns';
 interface DashboardHeaderProps {
   title: string;
   data: CampaignData[];
-  selectedFranchisee: string;
-  setSelectedFranchisee: (val: string) => void;
   selectedClient: string;
   setSelectedClient: (val: string) => void;
   dateRange: RangeValue | null;
@@ -24,8 +22,6 @@ interface DashboardHeaderProps {
 export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   title,
   data,
-  selectedFranchisee,
-  setSelectedFranchisee,
   selectedClient,
   setSelectedClient,
   dateRange,
@@ -37,30 +33,16 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   assignedAccountIds
 }) => {
 
-  // 1. Prepare Franchise Options from available list (Deduplicated)
-  const franchiseOptions = useMemo(() => {
-    // Unique by name to prevent duplicate keys
-    const unique = new Map();
-    availableFranchises.forEach(f => {
-      if (!unique.has(f.name)) {
-        unique.set(f.name, { value: f.name, label: f.name });
-      }
-    });
-    return Array.from(unique.values());
-  }, [availableFranchises]);
+  // 1. Prepare Franchise Options - REMOVED
 
-  // 2. Extract Clients (Filtered by Franchisee)
-  // When there's only 1 available franchise, auto-filter by that franchise even if not selected
-  const effectiveFranchiseFilter = selectedFranchisee || (availableFranchises.length === 1 ? availableFranchises[0].name : '');
 
+  // 2. Extract Clients
+  
   const clients = useMemo(() => {
     let filtered = metaAccounts || [];
 
-    // Step 1: Filter by selected franchise
-    if (effectiveFranchiseFilter) {
-      // Filter the metaAccounts list by franchise name (franchise_id stores name, not UUID)
-      filtered = filtered.filter(acc => acc.franchise_id === effectiveFranchiseFilter);
-    }
+    // Step 1: Filter by selected franchise - REMOVED
+
 
     // Step 2: Apply RBAC - Filter by user's assigned accounts
     // Admins and executives see all accounts, other roles are restricted
@@ -80,22 +62,26 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
     // Step 3: Filter by Visibility Settings
     // Only show accounts marked as visible (client_visibility === true OR null/undefined if legacy)
     // We assume explicit false means hidden
-    filtered = filtered.filter(acc => acc.client_visibility !== false);
-
+    // Step 3: Filter by Visibility Settings
+    // Only show accounts marked as visible (client_visibility === true OR null/undefined if legacy)
     // Sort and map to options format
     // Use display_name (Nome Ajustado) if filled, otherwise use account_name (Nome da Conta)
-    return filtered
+    const clientOptions = filtered
+      .filter(acc => acc.client_visibility !== false)
       .map(acc => ({
         value: acc.account_id,
         label: acc.display_name || acc.account_name
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [metaAccounts, effectiveFranchiseFilter, userRole, assignedAccountIds]);
+
+    // Add "All Accounts" option
+    return [
+      { value: 'ALL', label: 'Todas as contas' },
+      ...clientOptions
+    ];
+  }, [metaAccounts, userRole, assignedAccountIds]);
 
   const isClientRole = userRole === 'client';
-
-  // Determine if we should show the "All" option
-  const showAllOption = franchiseOptions.length > 1;
 
   return (
     <div className="flex h-20 w-full items-center justify-between border-b border-slate-200 bg-white px-6 shadow-sm z-50 relative">
@@ -112,22 +98,8 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
       {/* Right: Global Filters Toolbar */}
       <div className="flex items-center gap-3">
 
-        {/* 1. Franqueado (Hidden for Clients) */}
-        {!isClientRole && (
-          <div className="w-[220px]">
-            <Select
-              placeholder="Selecione Franquia"
-              value={effectiveFranchiseFilter}
-              onChange={(e) => {
-                setSelectedFranchisee(e.target.value);
-                setSelectedClient(''); // Reset client
-              }}
-              options={showAllOption ? [{ value: '', label: 'Todos Franqueados' }, ...franchiseOptions] : franchiseOptions}
-              disabled={isLocked || franchiseOptions.length <= 1}
-            />
-            {(isLocked || franchiseOptions.length <= 1) && <div className="absolute top-1/2 right-8 -translate-y-1/2 pointer-events-none text-slate-400"><Filter size={12} className="opacity-50" /></div>}
-          </div>
-        )}
+        {/* 1. Franqueado (Hidden for Clients) - REMOVED */}
+
 
         {/* 2. Cliente */}
         <div className="w-[220px]">

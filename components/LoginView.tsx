@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, Lock, Mail, ArrowRight, Loader2 } from "lucide-react";
-import { supabase } from "../services/supabaseClient";
+import { useAuth } from "../src/auth/useAuth";
 
 // Utility for class matching
 import { clsx, type ClassValue } from "clsx";
@@ -108,28 +108,21 @@ export const LoginView: React.FC = () => {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
+    const { login } = useAuth();
+
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
         setError(null);
 
         try {
-            const { data, error } = await supabase.auth.signInWithPassword({
-                email,
-                password,
-            });
-
-            if (error) {
-                // Better error message
-                if (error.message.includes('Invalid login')) {
-                    throw new Error("Credenciais inválidas. Verifique email e senha.");
-                }
-                throw error;
-            }
-            // Success assumes App Auth State Listener will pick up the shift
+            await login(email, password);
+            // On success, the AuthProvider updates the session, 
+            // and the main App component (listening to useAuth) will redirect to Dashboard.
         } catch (err: any) {
             console.error("Login failed", err);
-            setError(err.message || "Erro ao fazer login.");
+            // The AuthProvider throws errors with friendly messages, so we just display them.
+            setError(err.message || "Erro ao fazer login. Tente novamente.");
         } finally {
             setLoading(false);
         }

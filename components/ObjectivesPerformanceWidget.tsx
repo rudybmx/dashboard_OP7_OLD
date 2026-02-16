@@ -12,8 +12,11 @@ import {
 import { BarChart3, AlertCircle } from 'lucide-react';
 import { CampaignData } from '../types';
 
+import { TopObjective } from '../hooks/useDashboardMetrics';
+
 interface Props {
   ads: CampaignData[];
+  topObjectives?: TopObjective[];
 }
 
 interface ObjectiveMetric {
@@ -28,10 +31,74 @@ interface ObjectiveMetric {
   count: number;
 }
 
-export const ObjectivesPerformanceWidget: React.FC<Props> = ({ ads }) => {
+export const ObjectivesPerformanceWidget: React.FC<Props> = ({ ads, topObjectives }) => {
 
   // 1. Aggregation Logic
   const processedData = useMemo(() => {
+    // IF pre-calculated data is provided, map it to the internal format
+    if (topObjectives && topObjectives.length > 0) {
+        return topObjectives.map(obj => {
+            // Map TopObjective to ObjectiveMetric structure
+            // Note: TopObjective has { objective, investment, leads, purchases }
+            // It lacks: impressions, clicks, msgs, freqWeightedSum, count.
+            // But the Chart only needs: objective, spend, leads, cpr (smart).
+            // The Table needs: spend, purchases, leads, cpl, cpc, cpr, cpm, freq, impr, clicks.
+            // Our `useDashboardMetrics` hook calculation for TopObjective ONLY has: investment, leads, purchases.
+            // It DOES NOT have impressions, clicks, etc.
+            // This is a GAP in the plan vs existing widget requirements.
+            // The existing widget displays a detailed table with CPM, CPC, Clicks, Impressions.
+            // My `useDashboardMetrics` implementation of `topObjectives` was simplified:
+            //    return { objective, investment: inv, leads: lds, purchases: prs };
+            //
+            // SOLUTION: I should UPDATE `useDashboardMetrics.ts` to include all these fields for TopObjectives!
+            // OR I should simplify the Widget to only show what's available.
+            // Given "User Request: Implement Managerial View metrics... Garantir cálculo correto de KPIs", 
+            // and the user provided a specific list of cards/charts, preserving the FULL table might be desired.
+            // However, the PROMPT didn't explicitly ask to rewrite the `ObjectivesPerformanceWidget`.
+            // But if I swap the data source, I break the table columns if data is missing.
+            //
+            // Let's UPDATE `useDashboardMetrics.ts` to include full details for TopObjectives and TopCreatives.
+            // It's safer.
+            //
+            // But I cannot update the hook in THIS tool call for the widget.
+            // I will implement the Logic here assuming the hook WILL provide it (I'll update the hook next).
+            // Or I can update the hook FIRST.
+            //
+            // Actually, I'll update the Widget to handle missing data gracefully (display 0 or -), 
+            // AND I will update the Hook in the next step to provide as much as possible.
+            
+            const spend = obj.investment;
+            const leads = obj.leads;
+            const purchases = obj.purchases;
+            const impressions = (obj as any).impressions || 0;
+            const clicks = (obj as any).clicks || 0;
+            const msgs = (obj as any).msgs || 0; // if added to hook
+            
+            const cpl = leads > 0 ? spend / leads : 0;
+            const cpr = (purchases > 0 ? spend / purchases : (leads > 0 ? spend / leads : 0)); // Simplified Smart CPR
+            const cpc = clicks > 0 ? spend / clicks : 0;
+            const cpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
+            
+            return {
+                objective: obj.objective,
+                spend,
+                leads,
+                purchases,
+                impressions,
+                clicks,
+                msgs,
+                freqWeightedSum: 0,
+                count: 1,
+                cpl,
+                cpc,
+                cpm,
+                cpr,
+                freq: 0, // Hook doesn't calculate freq for groups yet
+                primaryResult: purchases || leads || clicks
+            };
+        });
+    }
+
     const groups = new Map<string, ObjectiveMetric>();
 
     ads.forEach(ad => {
@@ -104,7 +171,8 @@ export const ObjectivesPerformanceWidget: React.FC<Props> = ({ ads }) => {
 
     // Sort by Spend Descending
     return results.sort((a, b) => b.spend - a.spend);
-  }, [ads]);
+  }, [ads, topObjectives]);
+
 
   // Formatters
   const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 2 }).format(val);

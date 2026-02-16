@@ -10,7 +10,11 @@ import { RangeValue } from './components/ui/calendar';
 import { subDays } from 'date-fns';
 import { useAuth } from './src/auth/useAuth';
 import { ViewLoader } from './components/ViewLoader';
+import { useUserAccess } from './src/auth/useUserAccess';
+import { ResolvedMetaAccount, ResolvedFranchise } from './src/auth/types';
+import { useQuery } from '@tanstack/react-query';
 import { logger } from './lib/logger';
+
 
 // Lazy load views for code splitting
 const SummaryView = lazy(() => import('./components/SummaryView'));
@@ -42,9 +46,12 @@ export default function App() {
 
   // Filter States
   // Filter States - Priority: LocalStorage > Default (URL Filters Removed)
+  // Filter States - Priority: LocalStorage > Default (URL Filters Removed)
+  /* Franchise filter removed per user request
   const [selectedFranchise, setSelectedFranchise] = useState<string>(() => {
     return localStorage.getItem('op7_franchise_filter') || '';
   });
+  */
 
   const [selectedAccount, setSelectedAccount] = useState<string>(() => {
     return localStorage.getItem('op7_account_filter') || '';
@@ -85,75 +92,125 @@ export default function App() {
     };
   }, [dateRange?.start, dateRange?.end]);
 
-  // Derived Values - Declared before useEffect to avoid hoisting issues
+  // --- ACCESS CONTROL HOOK ---
+  const {
+    isAdmin,
+    isClient,
+    allowedAccountIds,
+    filterAccountsByAccess
+  } = useUserAccess(userProfile);
+
+  // --- DATA FETCHING (QUERIES) ---
+  // Load franchises and accounts once (or when session changes)
+  const { data: allFranchises } = useMemo(() => ({ data: officialFranchises }), [officialFranchises]); // Legacy compat until we move to useQuery fully
+  // We keep existing fetchFranchises effect for now to minimize diff, but we could useQuery here.
+
+  // --- FILTERED LISTS (MEMOIZED) ---
   const availableFranchises = useMemo(() => {
-    if (!userProfile) return [];
-    if (userProfile.role === 'admin' || userProfile.role === 'executive') return officialFranchises;
-    if (userProfile.role === 'client') return [];
+    if (!officialFranchises.length) return [];
+    
+    if (isAdmin) return officialFranchises;
 
-    // Garantir que assigned_franchise_ids é sempre um array
-    const assignedIds = Array.isArray(userProfile.assigned_franchise_ids)
-      ? userProfile.assigned_franchise_ids
-      : [];
+    // Derive franchises from accessible accounts
+    if (metaAccounts.length > 0) {
+        const allowedFranchiseIds = new Set(metaAccounts.map(a => a.franchise_id).filter(Boolean));
+        return officialFranchises.filter(f => allowedFranchiseIds.has(f.id));
+    }
+    
+    return []; 
+  }, [officialFranchises, metaAccounts, isAdmin]);
 
-    // Tentamos filtrar por ID ou NAME para ser resiliente
-    const filtered = officialFranchises.filter(f =>
-      assignedIds.includes(f.id) || assignedIds.includes(f.name)
-    );
+  const availableAccounts = useMemo(() => {
+      if (!metaAccounts.length) return [];
+      
+      const mappedAccounts: ResolvedMetaAccount[] = metaAccounts.map(a => ({
+          ...a,
+          id: a.account_id,
+          franchise_id: a.franchise_id || null, // Ensure compatibility
+          franchise_name: a.franchise_name || ''
+      }));
 
-    logger.debug('Franchise filter applied:', { role: userProfile.role, count: filtered.length });
-    return filtered;
-  }, [userProfile, officialFranchises]);
+      return filterAccountsByAccess(mappedAccounts);
+  }, [metaAccounts, filterAccountsByAccess]);
 
-  // Derived Strings for stable dependencies
-  const franchiseString = useMemo(() =>
-    availableFranchises.map(f => f.name).sort().join(','),
-    [availableFranchises]
-  );
-
-  const accountString = useMemo(() =>
-    (userProfile?.assigned_account_ids || []).sort().join(','),
-    [userProfile?.assigned_account_ids]
-  );
 
   // Load Data
   useEffect(() => {
-    if (!session || !userProfile) return;
-
-    // For non-admin users, wait for franchises to load before fetching data
-    const isAdmin = userProfile.role === 'admin' || userProfile.role === 'executive';
-    const isClient = userProfile.role === 'client';
-
-    // If user has restricted access by franchise, wait for franchises to be calculated
-    if (!isAdmin && !isClient && !franchiseString) {
-      logger.debug('Waiting for franchise restrictions to load...');
-      return;
-    }
+    if (!session || !userProfile || !dateRange?.start || !dateRange?.end) return;
 
     const loadData = async () => {
       setLoading(true);
       try {
-        const start = stableDates.startText ? new Date(stableDates.startText) : subDays(new Date(), 30);
-        const end = stableDates.endText ? new Date(stableDates.endText) : new Date();
+        const start = dateRange.start!;
+        const end = dateRange.end!;
+        
+        // Determina franquias para filtro (IDs sent to Service)
+        // Always empty means "all accessible" (Service handles logic)
+        const franchiseIdsForService: string[] = [];
+        
+        /* Removed filter logic
+        if (selectedFranchise) {
+          // ...
+          const found = availableFranchises.find(f => f.name === selectedFranchise);
+          if (found) {
+             franchiseIdsForService = [found.id];
+          } else {
+             logger.warn(`Selected franchise "${selectedFranchise}" not found in available list.`);
+          }
+        } 
+        */
+        // If not selected, we send empty (server handles "all" or we rely on account filtering)
 
-        // Use UI-selected filters if set, otherwise use profile defaults
-        const franchiseNames = selectedFranchise ? [selectedFranchise] : (franchiseString ? franchiseString.split(',') : []);
-
-        // Strip 'act_' prefix from account IDs if present (database uses numeric format)
-        const normalizedAccountId = selectedAccount ? selectedAccount.replace(/^act_/i, '') : '';
-        const accountIds = normalizedAccountId ? [normalizedAccountId] : (accountString ? accountString.split(',') : []);
+        // Determina contas para filtro
+        let accountIds: string[] = [];
+        const normalizedSelected = selectedAccount ? selectedAccount.replace(/^act_/i, '') : '';
+        
+        if (selectedAccount === 'ALL') {
+             // 'ALL' Logic:
+             // Admin: Empty array [] sent to service usually implies "All Data" (or we might need to fetch all IDs if RPC demands it). 
+             // Standard behavior in this app for Admin "All" is usually sending empty filters.
+             // Client: Must restrict to allowedAccountIds.
+             if (!isAdmin) {
+                 accountIds = allowedAccountIds;
+             }
+        } else if (normalizedSelected) {
+          accountIds = [normalizedSelected];
+        } else if (!isAdmin) {
+           // Fallback if nothing selected (initial state empty) -> restricted to allowed
+           accountIds = allowedAccountIds;
+        }
 
         logger.info('Loading dashboard data:', { 
           role: userProfile.role,
-          franchiseCount: franchiseNames.length,
           accountCount: accountIds.length 
         });
 
-        const [campaignResult, kpiResult, summaryResult, allAccounts] = await Promise.all([
-          fetchCampaignData(start, end, franchiseNames, accountIds),
-          fetchKPIComparison(start, end, franchiseNames, accountIds),
-          fetchSummaryReport(start, end, franchiseNames, accountIds),
-          fetchMetaAccounts()
+        // Fetch Accounts First (to have the list for filtering)
+        const allAccountsRaw = await fetchMetaAccounts();
+        
+        // Filter accounts for the dropdown/state
+        // If Admin: All accounts
+        // If Client: Filter by allowedAccountIds
+        const mappedAccounts: ResolvedMetaAccount[] = allAccountsRaw.map(a => {
+             // Find franchise name using ID if available
+             const franchise = officialFranchises.find(f => f.id === a.franchise_id);
+             return {
+                 ...a, 
+                 id: a.account_id,
+                 franchise_id: a.franchise_id || null, // Ensure compatibility
+                 franchise_name: franchise?.name || '',
+                 status: (a.status === 'removed' ? 'removed' : 'active') as 'active' | 'removed' | 'disabled'
+             };
+        });
+        
+        const filteredAccounts = filterAccountsByAccess(mappedAccounts);
+        setMetaAccounts(filteredAccounts);
+
+        // Now fetch data
+        const [campaignResult, kpiResult, summaryResult] = await Promise.all([
+          fetchCampaignData(start, end, franchiseIdsForService, accountIds),
+          fetchKPIComparison(start, end, franchiseIdsForService, accountIds),
+          fetchSummaryReport(start, end, franchiseIdsForService, accountIds)
         ]);
 
         setData(campaignResult.current);
@@ -161,25 +218,8 @@ export default function App() {
         setKpiRpcData(kpiResult);
         setSummaryData(summaryResult);
         
-        // RBAC: Filter accounts by user's available franchises
-        // Admins/executives see all accounts; other roles see only their franchise accounts
-        const isAdminOrExecutive = userProfile.role === 'admin' || userProfile.role === 'executive';
-        const allowedFranchiseNames = availableFranchises.map(f => f.name);
-        
-        const filteredAccounts = isAdminOrExecutive 
-          ? allAccounts 
-          : allAccounts.filter(acc => allowedFranchiseNames.includes(acc.franchise_id));
-        
-        logger.debug('Accounts filtered by franchise:', { 
-          total: allAccounts.length, 
-          filtered: filteredAccounts.length,
-          allowedFranchises: allowedFranchiseNames 
-        });
-        
-        setMetaAccounts(filteredAccounts);
         setIsDemoMode(campaignResult.isMock);
         if (campaignResult.isMock) setConnectionError(campaignResult.error);
-
         setIsDataLoaded(true);
 
       } catch (err) {
@@ -190,17 +230,23 @@ export default function App() {
     };
 
     loadData();
-    // VITAL: Include franchiseString to reload when franchise restrictions are available
-    // REMOVED 'session' from dependencies to prevent re-fetching on token refresh (window focus)
-    // REFACTOR: The derived strings (franchiseString, accountString) are primitive strings. 
-    // They are stable dependencies that only change when permissions actually change (due to AuthProvider stability fix).
-  }, [userProfile?.id, userProfile?.role, stableDates.startText, stableDates.endText, selectedFranchise, selectedAccount, franchiseString, accountString]);
+    
+    // Dependencies: Stable ones only
+  }, [
+    session, 
+    userProfile?.id, 
+    dateRange?.start?.toISOString(), 
+    dateRange?.end?.toISOString(),
+    // selectedFranchise, // Removed dependency
+    selectedAccount
+    // availableFranchises removed to prevent loop (it depends on metaAccounts which is set here)
+  ]);
 
   // Sync Filters to LocalStorage (URL Sync Removed)
   useEffect(() => {
-    localStorage.setItem('op7_franchise_filter', selectedFranchise);
+    // localStorage.setItem('op7_franchise_filter', selectedFranchise);
     localStorage.setItem('op7_account_filter', selectedAccount);
-  }, [selectedFranchise, selectedAccount]);
+  }, [selectedAccount]);
 
   // Save Dates to LocalStorage
   useEffect(() => {
@@ -216,32 +262,16 @@ export default function App() {
   const currentFilteredBalance = useMemo(() => {
     if (!metaAccounts.length) return 0;
 
-    // Use selectedFranchise if set, otherwise use user's assigned franchises
-    const effectiveFranchiseFilter = selectedFranchise ||
-      (availableFranchises.length === 1 ? availableFranchises[0].name : '');
-
-    // For RBAC: get all allowed franchise names if no specific filter
-    const allowedFranchiseNames = availableFranchises.map(f => f.name);
-
+    // Franchise filter removed - calculate for all visible accounts
+    
     return metaAccounts
       .filter(acc => {
-        // If a specific franchise is selected, use that filter
-        if (effectiveFranchiseFilter) {
-          return acc.franchise_id === effectiveFranchiseFilter;
-        }
-        // Otherwise, filter by all allowed franchises (for RBAC)
-        if (allowedFranchiseNames.length > 0) {
-          return allowedFranchiseNames.includes(acc.franchise_id);
-        }
-        // Admins/executives see all
-        return true;
-      })
-      .filter(acc => {
+        if (selectedAccount === 'ALL') return true; // Sum matching accounts
         const matchAccount = !selectedAccount || acc.account_id === selectedAccount || acc.account_name === selectedAccount;
         return matchAccount;
       })
       .reduce((sum, acc) => sum + (acc.current_balance || 0), 0);
-  }, [metaAccounts, selectedFranchise, selectedAccount, availableFranchises]);
+  }, [metaAccounts, selectedAccount]);
 
   // Separate Effect for Franchises (Only once or when profile changes)
   useEffect(() => {
@@ -258,14 +288,21 @@ export default function App() {
   }, [session]);
 
   // Filters Reset
-  useEffect(() => { setSelectedAccount(''); }, [selectedFranchise]);
+  // Filters Reset - REMOVED
+  // useEffect(() => { setSelectedAccount(''); }, [selectedFranchise]);
 
   const filteredData = useMemo(() => {
     // RBAC: Require account selection - no data shown without specific account
     if (!selectedAccount) return [];
     
     return data.filter(d => {
-      const matchFranchise = !selectedFranchise || d.franqueado === selectedFranchise;
+      // Logic for ALL
+      if (selectedAccount === 'ALL') {
+          // If Admin, generic ALL shows everything.
+          // If Client, data is already restricted by fetching logic (loadData sends restricted IDs).
+          // So filtering by "ALL" here just means "don't filter by specific account ID".
+          return true;
+      }
 
       // Handle both 'act_' prefixed and numeric account IDs
       const normalizedSelected = selectedAccount ? selectedAccount.replace(/^act_/i, '') : '';
@@ -274,16 +311,16 @@ export default function App() {
         d.account_id === normalizedSelected ||
         d.account_name === selectedAccount;
 
-      return matchFranchise && matchAccount;
+      return matchAccount; // matchFranchise && matchAccount;
     });
-  }, [selectedFranchise, selectedAccount, data]);
+  }, [selectedAccount, data]);
 
   const comparisonData = useMemo(() => {
     // RBAC: Require account selection - no data shown without specific account
     if (!selectedAccount) return [];
     
     return formattedComparisonData.filter(d => {
-      const matchFranchise = !selectedFranchise || d.franqueado === selectedFranchise;
+       if (selectedAccount === 'ALL') return true;
 
       // Handle both 'act_' prefixed and numeric account IDs
       const normalizedSelected = selectedAccount ? selectedAccount.replace(/^act_/i, '') : '';
@@ -292,9 +329,9 @@ export default function App() {
         d.account_id === normalizedSelected ||
         d.account_name === selectedAccount;
 
-      return matchFranchise && matchAccount;
+      return matchAccount; // matchFranchise && matchAccount;
     });
-  }, [selectedFranchise, selectedAccount, formattedComparisonData]);
+  }, [selectedAccount, formattedComparisonData]);
 
   // Auth Guards & Loading
   if (authLoading) return (
@@ -341,17 +378,15 @@ export default function App() {
             <DashboardHeader
               title={activeView === 'dashboard' ? 'Visão Gerencial' : activeView === 'summary' ? 'Resumo Gerencial' : activeView === 'executive' ? 'Visão Executiva' : activeView === 'campaigns' ? 'Performance de Campanhas' : activeView === 'creatives' ? 'Galeria de Criativos' : activeView === 'ads' ? 'Detalhamento de Anúncios' : activeView === 'demographics' ? 'Inteligência de Público' : activeView === 'planning' ? 'Planejamento Analítico' : 'Dashboard'}
               data={data}
-              selectedFranchisee={selectedFranchise}
-              setSelectedFranchisee={setSelectedFranchise}
               selectedClient={selectedAccount}
               setSelectedClient={setSelectedAccount}
               dateRange={dateRange}
               setDateRange={setDateRange}
               isLocked={availableFranchises.length === 1 && userProfile?.role !== 'admin'}
               availableFranchises={availableFranchises}
-              metaAccounts={metaAccounts}
+              metaAccounts={availableAccounts}
               userRole={userProfile?.role}
-              assignedAccountIds={userProfile?.assigned_account_ids}
+              assignedAccountIds={allowedAccountIds}
             />
           )}
         </header>
@@ -364,11 +399,11 @@ export default function App() {
               {activeView === 'summary' && (
                 <SummaryView
                   data={filteredData}
-                  selectedFranchisee={selectedFranchise}
+                  selectedFranchisee={''} // Logic Removed
                   selectedClient={selectedAccount}
                   dateRange={dateRange}
                   allowedFranchises={availableFranchises.map(f => f.name)}
-                  allowedAccounts={userProfile?.assigned_account_ids}
+                  allowedAccounts={allowedAccountIds}
                   externalSummaryData={summaryData}
                   externalLoading={loading && !isDataLoaded}
                 />
@@ -376,13 +411,32 @@ export default function App() {
               {activeView === 'planning' && <PlanningDashboardView allowedFranchises={availableFranchises.map(f => f.name)} userRole={userProfile?.role} />}
               {activeView === 'dashboard' && (
                 <ManagerialView
-                  data={filteredData}
-                  comparisonData={comparisonData}
-                  kpiData={selectedAccount ? kpiRpcData : null}
-                  selectedFranchisee={selectedFranchise}
-                  selectedClient={selectedAccount}
-                  externalTotalBalance={selectedAccount ? currentFilteredBalance : 0}
+                  dateRange={dateRange}
+                  accountIds={(() => {
+                      // Logic reused from loadData to determining effective Account IDs
+                      const normalizedSelected = selectedAccount ? selectedAccount.replace(/^act_/i, '') : '';
+                      
+                      if (selectedAccount === 'ALL') {
+                          // Allow 'ALL' to signify "All accessible accounts"
+                          // Admin: all visible (use availableAccounts.map(id))
+                          // Client: allowedAccountIds
+                          
+                          if (!userProfile) return [];
+                          if (userProfile.role === 'admin') {
+                              return metaAccounts.map(a => a.account_id);
+                          } else {
+                              return allowedAccountIds;
+                          }
+                      } else if (normalizedSelected) {
+                          return [normalizedSelected];
+                      } else if (userProfile?.role !== 'admin') {
+                          // Fallback client
+                          return allowedAccountIds;
+                      }
+                      return []; // Admin no selection -> empty?
+                  })()}
                 />
+
               )}
               {activeView === 'executive' && <DashboardOverview data={filteredData} />}
               {activeView === 'campaigns' && <CampaignsView data={filteredData} />}
@@ -396,7 +450,7 @@ export default function App() {
               )}
               {activeView === 'creatives' && <CreativesView data={filteredData} />}
               {activeView === 'demographics' && <DemographicsGeoView data={filteredData} />}
-              {activeView === 'settings' && (userProfile?.role === 'admin' || userProfile?.role === 'executive') ? <SettingsView userRole={userProfile?.role} /> : activeView === 'settings' && (
+              {activeView === 'settings' && (userProfile?.role === 'admin') ? <SettingsView userRole={userProfile?.role} /> : activeView === 'settings' && (
                 <div className="flex h-[60vh] w-full items-center justify-center">
                   <div className="flex max-w-md flex-col items-center text-center gap-4 p-8 bg-white rounded-2xl border border-slate-200">
                     <Shield className="h-12 w-12 text-red-500 bg-red-50 p-3 rounded-full mb-2" />

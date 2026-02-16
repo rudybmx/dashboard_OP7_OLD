@@ -1,10 +1,11 @@
 export { supabase } from './supabaseClient';
 import { supabase } from './supabaseClient';
-import { CampaignData, SummaryReportRow } from '../types';
+import { CampaignData, SummaryReportRow, MetaAdAccount } from '../types';
 import { format } from 'date-fns';
 import { MOCK_DATA } from '../constants';
 import { Database } from '../types/database.types';
 import { logger } from '../lib/logger';
+
 
 // Tipos auxiliares para evitar 'any'
 type ViewRow = Database['public']['Views']['vw_dashboard_unified']['Row'];
@@ -25,99 +26,7 @@ const VIEW_NAME = 'vw_dashboard_unified';
 import { getPreviousPeriod, formatDateForDB } from '../lib/dateUtils';
 
 // --- HELPER: Centralized User Access Profile Fetch ---
-let profileCache: Map<string, { data: any, timestamp: number }> = new Map();
-let profileFetchPromises: Map<string, Promise<any>> = new Map();
-
-// --- HELPER: Franchise Name to ID Cache ---
-let franchiseIdCache: Map<string, string> = new Map();
-let franchiseCacheTimestamp = 0;
-
-export const refreshFranchiseCache = async () => {
-    // Only refresh if older than 5 minutes
-    if (Date.now() - franchiseCacheTimestamp < 300000 && franchiseIdCache.size > 0) {
-        return;
-    }
-
-    const { data, error } = await supabase
-        .from('tb_franqueados')
-        .select('id, nome');
-
-    if (!error && data) {
-        franchiseIdCache.clear();
-        data.forEach(f => {
-            if (f.nome) franchiseIdCache.set(f.nome, f.id);
-        });
-        franchiseCacheTimestamp = Date.now();
-    }
-};
-
-const resolveFranchiseIds = async (names: string[] | null | undefined): Promise<string[] | null> => {
-    if (!names || names.length === 0) return null;
-    
-    // Ensure cache is populated
-    await refreshFranchiseCache();
-
-    const ids = names.map(name => franchiseIdCache.get(name)).filter(Boolean) as string[];
-    return ids.length > 0 ? ids : null;
-};
-
-export const fetchUserProfile = async (email: string | undefined) => {
-    if (!email) return null;
-
-    // 1. Cache Check (60 seconds)
-    const cached = profileCache.get(email);
-    if (cached && (Date.now() - cached.timestamp < 60000)) {
-        logger.debug('Using cached profile for', email);
-        return cached.data;
-    }
-
-    // 2. Deduplication Check (Ongoing promise)
-    if (profileFetchPromises.has(email)) {
-        logger.debug('Reusing existing profile fetch for', email);
-        return profileFetchPromises.get(email);
-    }
-
-    const promise = (async () => {
-        try {
-            const { data, error } = await supabase
-                .from('perfil_acesso')
-                .select('*')
-                .eq('email', email)
-                .maybeSingle();
-
-            if (error) {
-                logger.warn('Error fetching perfil_acesso:', error);
-                return null;
-            }
-
-            if (!data) return null;
-
-            // If raw IDs are UUIDs, use them. If they are names (legacy), we must resolve them?
-            // The DB schema says assigned_franchise_ids is UUID[], so we assume they are IDs here.
-            // However, the Frontend confusingly treats them as names in some places. 
-            // We'll trust the DB type for the profile.
-
-            const result = {
-                ...data,
-                name: data.nome || email.split('@')[0],
-                assigned_franchise_ids: data.assigned_franchise_ids || [],
-                assigned_account_ids: data.assigned_account_ids || []
-            };
-
-            // Update Cache
-            profileCache.set(email, { data: result, timestamp: Date.now() });
-            return result;
-        } catch (err) {
-            logger.error('Exception fetching profile:', err);
-            return null;
-        } finally {
-            profileFetchPromises.delete(email);
-        }
-    })();
-
-    profileFetchPromises.set(email, promise);
-    return promise;
-};
+// Moved to AuthProvider.tsx (Internal Auth)
 
 // --- HELPER: Fetch First URLs for Persistence ---
 const fetchAdFirstUrls = async (adIds: string[]): Promise<FirstUrlRow[]> => {
@@ -156,31 +65,11 @@ export const fetchCampaignData = async (
         const prevStartStr = formatDateForDB(prevStart);
         const prevEndStr = formatDateForDB(prevEnd);
 
-        let finalFranchisesNames = franchiseFilter && franchiseFilter[0] !== '' ? franchiseFilter : null;
-        let finalAccounts = accountFilter && accountFilter[0] !== '' ? accountFilter : null;
+        let finalFranchisesIds = franchiseFilter && franchiseFilter.length > 0 ? franchiseFilter : null;
+        let finalAccounts = accountFilter && accountFilter.length > 0 ? accountFilter : null;
 
-        // Auto-resolve User Profile Restrictions if no filter
-        if (!finalFranchisesNames && !finalAccounts) {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (session?.user?.email) {
-                const profile = await fetchUserProfile(session.user.email);
-                if (profile) {
-                    const isAdmin = profile.role === 'admin' || profile.role === 'executive';
-                    if (!isAdmin) {
-                        // Profile stores IDs (UUIDs). API expects IDs.
-                        // BUT, logic below expects 'finalFranchisesNames' to be NAMES because frontend passes names?
-                        // Actually, if we pass IDs here, we must ensure we don't try to map them again.
-                        
-                        // For simplicity: If profile has IDs, we use them directly as the resolved IDs.
-                        // But wait, the function is designed to handle frontend Filters which are NAMES.
-                        // We need a variable for IDs.
-                    }
-                }
-            }
-        }
         
-        // Resolve Names (Strings) to IDs (UUIDs)
-        const resolvedFranchiseIds = await resolveFranchiseIds(finalFranchisesNames);
+
 
         // If user is restricted, we merge/intersect logic (omitted for brevity, relying on backend RLS/policy usually, but here we do param injection)
         // If we resolved IDs, usage them.
@@ -190,14 +79,14 @@ export const fetchCampaignData = async (
             (supabase.rpc as any)('get_campaign_summary', {
                 p_start_date: currentStartStr,
                 p_end_date: currentEndStr,
-                p_franchise_ids: (resolvedFranchiseIds && resolvedFranchiseIds.length > 0) ? resolvedFranchiseIds : null,
-                p_account_ids: (finalAccounts && finalAccounts.length > 0) ? finalAccounts : null
+                p_franchise_ids: finalFranchisesIds,
+                p_account_ids: finalAccounts
             }),
             (supabase.rpc as any)('get_campaign_summary', {
                 p_start_date: prevStartStr,
                 p_end_date: prevEndStr,
-                p_franchise_ids: (resolvedFranchiseIds && resolvedFranchiseIds.length > 0) ? resolvedFranchiseIds : null,
-                p_account_ids: (finalAccounts && finalAccounts.length > 0) ? finalAccounts : null
+                p_franchise_ids: finalFranchisesIds,
+                p_account_ids: finalAccounts
             })
         ]);
 
@@ -308,18 +197,16 @@ export const fetchKPIComparison = async (
     try {
         const { start: prevStart, end: prevEnd } = getPreviousPeriod(startDate, endDate);
 
-        let finalFranchisesNames = franchiseFilter && franchiseFilter[0] !== '' ? franchiseFilter : null;
-        let finalAccounts = accountFilter && accountFilter[0] !== '' ? accountFilter : null;
-
-        const resolvedIds = await resolveFranchiseIds(finalFranchisesNames);
+        let finalFranchisesIds = franchiseFilter && franchiseFilter.length > 0 ? franchiseFilter : null;
+        let finalAccounts = accountFilter && accountFilter.length > 0 ? accountFilter : null;
 
         const { data, error } = await (supabase.rpc as any)('get_kpi_comparison', {
             p_start_date: formatDateForDB(startDate),
             p_end_date: formatDateForDB(endDate),
             p_prev_start_date: formatDateForDB(prevStart),
             p_prev_end_date: formatDateForDB(prevEnd),
-            p_franchise_filter: (resolvedIds && resolvedIds.length > 0) ? resolvedIds : null,
-            p_account_filter: (finalAccounts && finalAccounts.length > 0) ? finalAccounts : null
+            p_franchise_filter: finalFranchisesIds,
+            p_account_filter: finalAccounts
         });
 
         if (error) {
@@ -342,16 +229,14 @@ export const fetchSummaryReport = async (
     accountFilter?: string[]
 ): Promise<SummaryReportRow[]> => {
     try {
-        let finalFranchiseFilter = franchiseFilter;
-        let finalAccountFilter = accountFilter;
-
-        const resolvedIds = await resolveFranchiseIds(finalFranchiseFilter);
+        let finalFranchiseFilter = franchiseFilter && franchiseFilter.length > 0 ? franchiseFilter : null;
+        let finalAccountFilter = accountFilter && accountFilter.length > 0 ? accountFilter : null;
 
         const { data, error } = await (supabase.rpc as any)('get_managerial_data', {
             p_start_date: format(startDate, 'yyyy-MM-dd'),
             p_end_date: format(endDate, 'yyyy-MM-dd'),
-            p_franchise_filter: (resolvedIds && resolvedIds.length > 0) ? resolvedIds : null,
-            p_account_filter: (finalAccountFilter && finalAccountFilter.length > 0) ? finalAccountFilter : null
+            p_franchise_filter: finalFranchiseFilter,
+            p_account_filter: finalAccountFilter
         });
 
         if (error) {
@@ -411,55 +296,61 @@ const safeFloat = (val: string | number | null | undefined): number => {
 };
 
 // BM Settings (tb_meta_ads_contas)
-export const fetchMetaAccounts = async () => {
-    const { data, error } = await supabase
-        .from('tb_meta_ads_contas')
-        .select('*') // No relationship needed for now, filtering is client-side or we rely on account_id
-        .order('nome_original', { ascending: true });
+export const fetchMetaAccounts = async (): Promise<MetaAdAccount[]> => {
+    // Uses RPC to bypass RLS since Supabase Client is Anon (Internal Auth)
+    // Cast to any to avoid TS error until types are regenerated
+    const { data, error } = await (supabase.rpc as any)('get_all_meta_accounts');
 
     if (error) {
         logger.error('Error fetching meta accounts:', error);
         return [];
     }
 
-    return data.map(row => ({
-        id: row.account_id,
-        account_id: row.account_id,
-        account_name: row.nome_original || 'Sem Nome',
-        display_name: row.nome_ajustado || '',
-        franchise_id: row.franqueado || '', // Legacy Text Field for simple display if needed
+    // Helper to safely parse float
+    const safeFloat = (val: any) => {
+        const parsed = parseFloat(val);
+        return isNaN(parsed) ? 0 : parsed;
+    };
+
+    return (data as any[]).map(row => ({
+        id: row.account_id,                        // PK interna da linha (usando account_id como ID único)
+        account_id: row.account_id,               // act na Meta
+        account_name: row.nome_original || 'Sem Nome',  // nome da conta na Meta
+        display_name: row.nome_ajustado || '',    // Nome Dashboard (editável no front)
+        // REMOVER uso de franchise_id no front (coluna Vínculo vai sair), mas manter se precisar pra filtros legados
+        franchise_id: row.franqueado || '',
+        franchise_name: '', // Não temos o join aqui, mas o front não vai usar mais
         categoria_id: row.categoria_id || '',
         status: (row.status_interno === 'removed' ? 'removed' : 'active') as 'removed' | 'active',
-        client_visibility: row.client_visibility ?? true,
+        // Visibilidade deve iniciar sempre inativa quando não definido:
+        client_visibility: row.client_visibility ?? false,
         current_balance: safeFloat(row.saldo_balanco),
         last_sync: row.updated_at || new Date().toISOString(),
         status_meta: row.status_meta || undefined,
         motivo_bloqueio: row.motivo_bloqueio || undefined,
         total_gasto: safeFloat(row.total_gasto),
-        status_interno: row.status_interno || 'A Classificar'
+        status_interno: row.status_interno || 'A Classificar',
     }));
 };
 
-export const updateMetaAccount = async (id: string, updates: Partial<any>) => {
-    const dbUpdates: MetaAccountUpdate = {};
+export const updateMetaAccount = async (id: string, updates: Partial<MetaAdAccount>) => {
+    // Map frontend fields to RPC params
+    const params: any = {
+        p_account_id: id
+    };
+    
+    // Only include params if they are defined in updates
+    if (updates.display_name !== undefined) params.p_display_name = updates.display_name;
+    if (updates.client_visibility !== undefined) params.p_client_visibility = updates.client_visibility;
+    if (updates.franchise_id !== undefined) params.p_franqueado = updates.franchise_id;
+    if (updates.categoria_id !== undefined) params.p_categoria_id = updates.categoria_id;
 
-    if (updates.display_name !== undefined) dbUpdates.nome_ajustado = updates.display_name;
-    if (updates.status_interno !== undefined) dbUpdates.status_interno = updates.status_interno;
-    if (updates.franchise_id !== undefined) dbUpdates.franqueado = updates.franchise_id; // Keeping legacy text sync
-    // Also update real UUID if possible? We need lookup. Omitted for now unless requested.
-    if (updates.categoria_id !== undefined) dbUpdates.categoria_id = updates.categoria_id;
-    if (updates.client_visibility !== undefined) dbUpdates.client_visibility = updates.client_visibility;
-    if (updates.status !== undefined) dbUpdates.status_interno = updates.status;
+    // Check if we have any updates besides ID
+    if (Object.keys(params).length <= 1) return;
 
-    const { data, error } = await supabase
-        .from('tb_meta_ads_contas')
-        .update(dbUpdates)
-        .eq('account_id', id)
-        .select()
-        .single();
+    const { error } = await (supabase.rpc as any)('update_meta_account_settings', params);
 
     if (error) throw error;
-    return data;
 };
 
 export const fetchFranchises = async () => {
@@ -480,34 +371,9 @@ export const fetchFranchises = async () => {
     }));
 };
 
-export const createFranchise = async (name: string) => {
-    const { data, error } = await (supabase.rpc as any)('create_franchise_unit', {
-        p_name: name
-    });
 
-    if (error) {
-        logger.error('Error creating franchise:', error);
-        throw error;
-    }
 
-    return {
-        id: data.id,
-        name: data.nome,
-        active: true
-    };
-};
 
-export const deleteFranchise = async (id: string) => {
-    logger.debug('Using RPC for Franchise Hard Delete');
-    const { error } = await (supabase.rpc as any)('delete_franchise_unit', {
-        p_id: id
-    });
-
-    if (error) {
-        logger.error('Error deleting franchise:', error);
-        throw error;
-    }
-};
 
 export type CategoryRow = Database['public']['Tables']['tb_categorias_clientes']['Row'];
 export type CategoryInsert = Database['public']['Tables']['tb_categorias_clientes']['Insert'];

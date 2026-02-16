@@ -24,7 +24,6 @@ export const UsersSettingsTab: React.FC = () => {
     const { 
         users, 
         setUsers,
-        franchises, 
         accounts,
         usersLoading: loading,
         isDataLoaded,
@@ -33,6 +32,7 @@ export const UsersSettingsTab: React.FC = () => {
 
     // Filter/UI States
     const [searchTerm, setSearchTerm] = useState('');
+    const [accountSearchTerm, setAccountSearchTerm] = useState(''); // New state for account filter
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
     const [passwordResetData, setPasswordResetData] = useState({ userId: '', newPassword: '' });
@@ -44,8 +44,7 @@ export const UsersSettingsTab: React.FC = () => {
     const initialFormState: UserFormData = {
         name: '',
         email: '',
-        role: 'franqueado', // Default safe
-        assigned_franchise_ids: [],
+        role: 'client',
         assigned_account_ids: [],
         password: ''
     };
@@ -59,7 +58,6 @@ export const UsersSettingsTab: React.FC = () => {
                 name: user.name,
                 email: user.email,
                 role: user.role,
-                assigned_franchise_ids: user.assigned_franchise_ids || [],
                 assigned_account_ids: user.assigned_account_ids || [],
                 password: '' // Don't fill password on edit
             });
@@ -86,6 +84,12 @@ export const UsersSettingsTab: React.FC = () => {
                 }
             } else {
                 if (!formData.password) throw new Error("Senha é obrigatória para novos usuários.");
+                
+                // Validação de Conta para Cliente
+                if (formData.role === 'client' && (!formData.assigned_account_ids || formData.assigned_account_ids.length === 0)) {
+                    throw new Error('Selecione pelo menos uma conta permitida para este usuário.');
+                }
+
                 const created = await userService.createUser(formData);
                 if (created) {
                     setUsers(prev => [created, ...prev]);
@@ -119,7 +123,7 @@ export const UsersSettingsTab: React.FC = () => {
         }
     };
 
-    const toggleArraySelection = (arrayName: 'assigned_franchise_ids' | 'assigned_account_ids', value: string, single: boolean = false) => {
+    const toggleArraySelection = (arrayName: 'assigned_account_ids', value: string, single: boolean = false) => {
         setFormData(prev => {
             const current = prev[arrayName] || [];
             
@@ -171,33 +175,18 @@ export const UsersSettingsTab: React.FC = () => {
     const getRoleBadge = (role: UserRole) => {
         switch(role) {
             case 'admin': return <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-xs font-bold border border-purple-200">Admin</span>;
-            case 'executive': return <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full text-xs font-bold border border-indigo-200">Executivo</span>;
-            case 'multifranqueado': return <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs font-bold border border-blue-200">Multi-Franquia</span>;
-            case 'franqueado': return <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full text-xs font-bold border border-emerald-200">Franqueado</span>;
-            case 'client': return <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full text-xs font-bold border border-orange-200">Cliente</span>;
+            case 'client': return <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full text-xs font-bold border border-orange-200">Cliente / Franqueado</span>;
             default: return <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full text-xs font-bold">User</span>;
         }
     };
 
     const getAccessSummary = (user: UserProfile) => {
-        if (user.role === 'admin' || user.role === 'executive') return <span className="text-slate-400 italic text-xs">Acesso Total</span>;
-        
-        if (user.role === 'client') {
-             const count = user.assigned_account_ids?.length || 0;
-             if (count === 0) return <span className="text-red-400 text-xs">Sem contas vinculadas</span>;
-             return <span className="text-slate-600 text-xs">{count} Conta(s) de Anúncio</span>;
+        if (user.role === 'admin') {
+            return <span className="text-slate-400 italic text-xs">Acesso Total</span>;
         }
-
-        const count = user.assigned_franchise_ids?.length || 0;
-        if (count === 0) return <span className="text-red-400 text-xs">Sem franquias vinculadas</span>;
-        
-        // Try to show names if few
-        if (count === 1) {
-            const fName = franchises.find(f => f.id === user.assigned_franchise_ids[0])?.name;
-            return <span className="text-slate-600 text-xs">{fName || 'Franquia desconhecida'}</span>;
-        }
-
-        return <span className="text-slate-600 text-xs">{count} Franquias</span>;
+        const count = user.assigned_account_ids?.length || 0;
+        if (count === 0) return <span className="text-red-400 text-xs">Sem contas vinculadas</span>;
+        return <span className="text-slate-600 text-xs">{count} Conta(s) de Anúncio</span>;
     };
 
 
@@ -317,7 +306,7 @@ export const UsersSettingsTab: React.FC = () => {
                                 <User className="text-indigo-600" size={20} />
                                 {isEditing ? 'Editar Usuário' : 'Novo Usuário'}
                             </h3>
-                            <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                            <button onClick={() => { setIsModalOpen(false); setAccountSearchTerm(''); }} className="text-slate-400 hover:text-slate-600 transition-colors">
                                 <X size={20} />
                             </button>
                         </div>
@@ -362,6 +351,7 @@ export const UsersSettingsTab: React.FC = () => {
                                     )}
                                 </div>
                                 <div className="space-y-4">
+                                    {/* Simplified Role Select */}
                                      <div>
                                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nível de Acesso (Role)</label>
                                         <select 
@@ -370,78 +360,55 @@ export const UsersSettingsTab: React.FC = () => {
                                             onChange={e => setFormData(prev => ({ 
                                                 ...prev, 
                                                 role: e.target.value as UserRole, 
-                                                assigned_franchise_ids: [], // Reset on role change
                                                 assigned_account_ids: [] 
                                             }))}
                                         >
-                                            <option value="franqueado">Franqueado (1 Unidade)</option>
-                                            <option value="multifranqueado">Multi-Franqueado (Várias Unidades)</option>
-                                            <option value="client">Cliente (Contas Específicas)</option>
-                                            <option value="executive">Executivo (Acesso Global)</option>
-                                            <option value="admin">Administrador (Total)</option>
+                                            <option value="client">Cliente / Franqueado (Contas Específicas)</option>
+                                            <option value="admin">Administrador (Acesso Total)</option>
                                         </select>
                                     </div>
 
-                                    {/* Conditional Selects */}
-                                    {formData.role === 'franqueado' && (
-                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                                            <label className="block text-xs font-bold text-indigo-600 uppercase mb-2 flex items-center gap-1">
-                                                <Store size={14} /> Selecione a Unidade
-                                            </label>
-                                            <select 
-                                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
-                                                value={formData.assigned_franchise_ids[0] || ''}
-                                                onChange={e => toggleArraySelection('assigned_franchise_ids', e.target.value, true)} // Single mode
-                                            >
-                                                <option value="">-- Selecione --</option>
-                                                {franchises.map(f => (
-                                                    <option key={f.id} value={f.id}>{f.name}</option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                    )}
-
-                                    {formData.role === 'multifranqueado' && (
-                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 max-h-48 overflow-y-auto">
-                                            <label className="block text-xs font-bold text-indigo-600 uppercase mb-2 flex items-center gap-1">
-                                                <Store size={14} /> Marque as Unidades
-                                            </label>
-                                            <div className="space-y-2">
-                                                {franchises.map(f => (
-                                                    <label key={f.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:text-indigo-600">
-                                                        <input 
-                                                            type="checkbox"
-                                                            checked={formData.assigned_franchise_ids.includes(f.id)}
-                                                            onChange={() => toggleArraySelection('assigned_franchise_ids', f.id, false)}
-                                                            className="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
-                                                        />
-                                                        {f.name}
-                                                    </label>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-
+                                    {/* Conditional Account Select for Clients */}
                                     {formData.role === 'client' && (
-                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 max-h-48 overflow-y-auto">
-                                            <label className="block text-xs font-bold text-indigo-600 uppercase mb-2 flex items-center gap-1">
-                                                <LayoutList size={14} /> Contas Permitidas
-                                            </label>
-                                            {accounts.length === 0 ? <p className="text-xs text-slate-400">Nenhuma conta disponível.</p> : (
-                                                <div className="space-y-2">
-                                                    {accounts.map(acc => (
-                                                        <label key={acc.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:text-indigo-600">
-                                                            <input 
-                                                                type="checkbox"
-                                                                checked={formData.assigned_account_ids.includes(acc.id)}
-                                                                onChange={() => toggleArraySelection('assigned_account_ids', acc.id, false)}
-                                                                className="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
-                                                            />
-                                                            <span className="truncate">{acc.account_name}</span>
-                                                        </label>
-                                                    ))}
+                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 max-h-64 flex flex-col">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <label className="text-xs font-bold text-indigo-600 uppercase flex items-center gap-1">
+                                                    <LayoutList size={14} /> Contas Permitidas
+                                                </label>
+                                                <div className="relative w-1/2">
+                                                    <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                                                    <input 
+                                                        type="text"
+                                                        placeholder="Filtrar contas..."
+                                                        className="w-full pl-7 pr-2 py-1 text-xs border border-slate-200 rounded-md focus:outline-none focus:border-indigo-500"
+                                                        value={accountSearchTerm}
+                                                        onChange={e => setAccountSearchTerm(e.target.value)}
+                                                    />
                                                 </div>
-                                            )}
+                                            </div>
+                                            
+                                            <div className="overflow-y-auto flex-1 space-y-2 pr-1">
+                                                {accounts.length === 0 ? <p className="text-xs text-slate-400">Nenhuma conta disponível.</p> : (
+                                                    <div className="space-y-2">
+                                                        {accounts
+                                                            .filter(acc => acc.account_name.toLowerCase().includes(accountSearchTerm.toLowerCase()))
+                                                            .map(acc => (
+                                                            <label key={acc.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:text-indigo-600">
+                                                                <input 
+                                                                    type="checkbox"
+                                                                    checked={formData.assigned_account_ids.includes(acc.id)}
+                                                                    onChange={() => toggleArraySelection('assigned_account_ids', acc.id, false)}
+                                                                    className="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                                                                />
+                                                                <span className="truncate">{acc.account_name}</span>
+                                                            </label>
+                                                        ))}
+                                                        {accounts.filter(acc => acc.account_name.toLowerCase().includes(accountSearchTerm.toLowerCase())).length === 0 && (
+                                                            <p className="text-xs text-slate-400 py-2 text-center">Nenhuma conta encontrada para "{accountSearchTerm}"</p>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     )}
                                 </div>

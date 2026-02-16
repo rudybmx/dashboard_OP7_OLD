@@ -1,267 +1,161 @@
 import React, { createContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import { Session } from '@supabase/supabase-js';
 import { supabase } from '../../services/supabaseService';
-import { UserProfile, UserRole } from './types';
+import { UserProfile, UserRole, LocalSession } from './types';
 import { logger } from '../../lib/logger';
 
 export interface AuthContextType {
-    session: Session | null;
+    session: LocalSession | null;
     userProfile: UserProfile | null;
     loading: boolean;
     error: string | null;
+    login: (email: string, password: string) => Promise<void>;
     logout: () => Promise<void>;
     clearError: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const STORAGE_KEY = 'op7_local_session';
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-    const [session, setSession] = useState<Session | null>(null);
+    const [session, setSession] = useState<LocalSession | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    // ========== FUNÇÃO ÚNICA DE INICIALIZAÇÃO ==========
-    const initializeAuth = useCallback(async () => {
+    // ========== CARREGAR SESSÃO DO STORAGE ==========
+    const loadSessionFromStorage = useCallback(async () => {
         let isMounted = true;
-
         try {
             setLoading(true);
-            setError(null);
-
-            logger.info('Auth initialization started');
-
-            // 1. Buscar sessão com timeout de 3 segundos
-            let currentSession: Session | null = null;
-
-            try {
-                const getSessionPromise = supabase.auth.getSession();
-                const timeoutPromise = new Promise<{ data: { session: null }, error: Error }>((_, reject) =>
-                    setTimeout(() => reject(new Error('Session check timeout')), 10000)
-                );
-
-                const result = await Promise.race([getSessionPromise, timeoutPromise]);
-
-                if (result.error) {
-                    throw result.error;
-                }
-
-                currentSession = result.data.session;
-            } catch (err: any) {
-                if (err.message === 'Session check timeout') {
-                    logger.warn('Session check timeout');
-                    if (isMounted) {
-                        setError('Conexão lenta. Tente novamente.');
-                        setLoading(false);
-                    }
-                    return;
-                }
-
-                // Refresh token inválido/expirado
-                if (
-                    err.message?.includes('Invalid Refresh Token') ||
-                    err.message?.includes('Refresh Token Not Found')
-                ) {
-                    logger.warn('Token expired, clearing session');
-                    await supabase.auth.signOut();
-                    localStorage.clear();
-                    if (isMounted) {
-                        setSession(null);
-                        setUserProfile(null);
-                        setLoading(false);
-                    }
-                    return;
-                }
-
-                throw err;
+            const stored = localStorage.getItem(STORAGE_KEY);
+            
+            if (!stored) {
+                if (isMounted) setLoading(false);
+                return;
             }
 
-            // 2. Se não há sessão, parar aqui
-            if (!currentSession?.user?.email) {
-                logger.info('No active session');
+            const localSession = JSON.parse(stored) as LocalSession;
+
+            // Validar se o usuário ainda existe e buscar perfil atualizado
+            const { data, error } = await supabase
+                .from('perfil_acesso')
+                .select('*')
+                .eq('email', localSession.email)
+                .maybeSingle();
+
+            if (error || !data) {
+                logger.warn('Session invalid or user not found:', error);
+                localStorage.removeItem(STORAGE_KEY);
                 if (isMounted) {
                     setSession(null);
                     setUserProfile(null);
-                    setLoading(false);
                 }
                 return;
             }
 
-            // 3. Sessão existe - buscar perfil
-            logger.info('Session found, fetching profile');
+            // Montar perfil
+            const pData = data as any;
+            const profile: UserProfile = {
+                id: pData.id,
+                email: pData.email,
+                name: pData.nome || pData.email.split('@')[0],
+                role: (pData.role as UserRole) || 'client',
+                assigned_account_ids: Array.isArray(pData.assigned_account_ids) ? pData.assigned_account_ids : [],
+                permissions: pData.permissions || [],
+                created_at: pData.created_at,
+            };
 
-            try {
-                const { data: profileData, error: profileError } = await supabase
-                    .from('perfil_acesso')
-                    .select('*')
-                    .eq('email', currentSession.user.email)
-                    .maybeSingle();
-
-                if (profileError) {
-                    // Check for common Supabase/PostgREST schema or connection errors
-                    if (profileError.code === 'PGRST116') {
-                        // This is "no rows returned", which is expected if maybeSingle is used and no row exists
-                        // But we already handle !profileData below.
-                    } else if (profileError.message?.includes('schema') || profileError.code?.startsWith('42') || profileError.code?.startsWith('P0')) {
-                        console.error('[Auth] Erro de Schema/Estrutura detectado:', profileError);
-                        if (isMounted) {
-                            setError('Erro interno de banco de dados (Schema). Por favor, execute o script de correção no painel do Supabase.');
-                        }
-                        return;
-                    } else {
-                        throw profileError;
-                    }
-                }
-
-                if (!profileData) {
-                    logger.error('Profile not found for user:', currentSession.user.email);
-                    if (isMounted) {
-                        setError('Seu perfil de usuário não foi encontrado. Se você acabou de criar a conta, aguarde alguns segundos ou verifique se o administrador executou o script de permissões.');
-                        // Deslogar usuário sem perfil para evitar loop de carregamento
-                        await supabase.auth.signOut();
-                        setSession(null);
-                        setUserProfile(null);
-                    }
-                    return;
-                }
-
-                // Perfil encontrado
-                const pData = profileData as any;
-                const profile: UserProfile = {
-                    id: pData.id || currentSession.user.id,
-                    email: pData.email || currentSession.user.email,
-                    name: pData.nome || currentSession.user.email?.split('@')[0] || 'Usuário',
-                    role: (pData.role as UserRole) || 'client',
-                    // DB uses native text[], so no parsing needed. Fallback to empty array.
-                    assigned_franchise_ids: pData.assigned_franchise_ids || [],
-                    assigned_account_ids: pData.assigned_account_ids || [],
-                    permissions: pData.permissions,
-                    created_at: pData.created_at,
-                };
-
-                logger.info('Profile processed:', {
-                    email: profile.email,
-                    role: profile.role
-                });
-
-                if (isMounted) {
-                    setSession(currentSession);
-
-                    // Deep comparison to prevent unnecessary re-renders
-                    setUserProfile(prev => {
-                        const isSame = prev &&
-                            prev.id === profile.id &&
-                            prev.email === profile.email &&
-                            prev.role === profile.role &&
-                            JSON.stringify(prev.assigned_account_ids) === JSON.stringify(profile.assigned_account_ids) &&
-                            JSON.stringify(prev.assigned_franchise_ids) === JSON.stringify(profile.assigned_franchise_ids);
-
-                        if (isSame) {
-                            logger.debug('Profile unchanged, maintaining reference');
-                            return prev;
-                        }
-
-                        logger.info('Authentication complete:', profile.email);
-                        return profile;
-                    });
-                }
-            } catch (profileErr: any) {
-                logger.error('Error fetching profile:', profileErr);
-                if (isMounted) {
-                    setError('Erro ao buscar informações do usuário. Tente novamente.');
-                    await supabase.auth.signOut();
-                    setSession(null);
-                    setUserProfile(null);
-                }
-            }
-        } catch (err: any) {
-            logger.error('Critical auth error:', err);
             if (isMounted) {
-                setError(err.message || 'Erro de autenticação');
-                await supabase.auth.signOut();
-                setSession(null);
-                setUserProfile(null);
+                setSession(localSession);
+                setUserProfile(profile);
             }
+
+        } catch (err) {
+            logger.error('Error loading session:', err);
+            localStorage.removeItem(STORAGE_KEY);
         } finally {
-            if (isMounted) {
-                setLoading(false);
-            }
+            if (isMounted) setLoading(false);
         }
     }, []);
 
-    // ========== EFEITO ÚNICO: Executar uma vez no mount ==========
-    useEffect(() => {
-        let isMounted = true;
+    // ========== LOGIN INTERNO ==========
+    const login = async (email: string, password: string) => {
+        setLoading(true);
+        setError(null);
+        try {
+            // Usar RPC para autenticação (bypassing RLS via Security Definer)
+            const { data, error } = await (supabase.rpc as any)('authenticate_user', {
+                p_email: email,
+                p_password: password
+            });
 
-        // Inicializar autenticação
-        initializeAuth();
-
-        // Registrar listener para mudanças
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (event, newSession) => {
-                if (!isMounted) return;
-
-                logger.debug('Auth event:', event);
-
-                // Ignorar evento inicial (já tratado por initializeAuth)
-                if (event === 'INITIAL_SESSION') {
-                    logger.debug('Ignoring INITIAL_SESSION (already processed)');
-                    return;
-                }
-
-                // Logout
-                if (event === 'SIGNED_OUT') {
-                    logger.info('User signed out');
-                    setSession(null);
-                    setUserProfile(null);
-                    setLoading(false);
-                    return;
-                }
-
-                // Login ou refresh bem-sucedido
-                if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-                    logger.info('Session updated:', event);
-                    setSession(newSession);
-                    // Re-executar inicialização para pegar perfil atualizado
-                    if (newSession) {
-                        initializeAuth();
-                    } else {
-                        setSession(null);
-                        setUserProfile(null);
-                        setLoading(false);
-                    }
-                    return;
-                }
+            if (error) {
+                console.error('Erro no login:', error);
+                throw new Error('Erro ao processar login.');
             }
-        );
 
-        return () => {
-            isMounted = false;
-            subscription.unsubscribe();
-        };
-    }, [initializeAuth]);
+            if (!data || data.length === 0) {
+                throw new Error('Credenciais inválidas.');
+            }
 
-    // ========== FUNÇÕES EXPORTADAS ==========
+            const pData = data[0]; // RPC returns array
+
+            // Sucesso - Criar sessão local
+            const newSession: LocalSession = {
+                userId: pData.id,
+                email: pData.email,
+                createdAt: new Date().toISOString()
+            };
+
+            const profile: UserProfile = {
+                id: pData.id,
+                email: pData.email,
+                name: pData.nome || pData.email.split('@')[0],
+                role: (pData.role as UserRole) || 'client',
+                assigned_account_ids: Array.isArray(pData.assigned_account_ids) ? pData.assigned_account_ids : [],
+                permissions: pData.permissions || [],
+                created_at: pData.created_at,
+            };
+
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(newSession));
+            
+            setSession(newSession);
+            setUserProfile(profile);
+
+        } catch (err: any) {
+            setError(err.message || 'Erro ao fazer login');
+            throw err; // Re-throw para o componente tratar se quiser
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // ========== LOGOUT ==========
     const logout = async () => {
         try {
-            await supabase.auth.signOut();
+            localStorage.removeItem(STORAGE_KEY);
             setSession(null);
             setUserProfile(null);
             setError(null);
-        } catch (err: any) {
-            logger.error('Error during logout:', err);
-            setError('Erro ao deslogar');
+        } catch (err) {
+            logger.error('Error logout:', err);
         }
     };
 
     const clearError = () => setError(null);
 
-    // ========== VALOR DO CONTEXTO ==========
+    // ========== EFEITOS ==========
+    useEffect(() => {
+        loadSessionFromStorage();
+    }, [loadSessionFromStorage]);
+
     const value: AuthContextType = {
         session,
         userProfile,
         loading,
         error,
+        login,
         logout,
         clearError,
     };
