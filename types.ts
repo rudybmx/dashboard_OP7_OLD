@@ -22,6 +22,10 @@ export interface DashboardMetric {
   frequencia: number;
   custo_por_lead: number;
   custo_por_compra: number;
+  // New Backend Metrics
+  cpl_conversas?: number;
+  cpl_compras?: number; // Override/Alias
+  cpl_total?: number;
   alcance: number;
   valor_compras?: number; // Total Purchase Value (Revenue)
 
@@ -137,4 +141,8 @@ export interface SummaryReportRow {
   clicks: number;
   impressoes: number;
   alcance: number;
+  // New Backend Metrics
+  cpl_conversas?: number;
+  cpl_compras?: number;
+  cpl_total?: number;
 }

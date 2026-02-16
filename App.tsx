@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import { Sidebar } from './components/layout/Sidebar';
 import { MobileNav } from './components/layout/MobileNav';
 import { DashboardHeader } from './components/DashboardHeader';
@@ -161,43 +161,16 @@ export default function App() {
         */
         // If not selected, we send empty (server handles "all" or we rely on account filtering)
 
-        // Determina contas para filtro
-        let accountIds: string[] = [];
-        const normalizedSelected = selectedAccount ? selectedAccount.replace(/^act_/i, '') : '';
-        
-        if (selectedAccount === 'ALL') {
-             // 'ALL' Logic:
-             // Admin: Empty array [] sent to service usually implies "All Data" (or we might need to fetch all IDs if RPC demands it). 
-             // Standard behavior in this app for Admin "All" is usually sending empty filters.
-             // Client: Must restrict to allowedAccountIds.
-             if (!isAdmin) {
-                 accountIds = allowedAccountIds;
-             }
-        } else if (normalizedSelected) {
-          accountIds = [normalizedSelected];
-        } else if (!isAdmin) {
-           // Fallback if nothing selected (initial state empty) -> restricted to allowed
-           accountIds = allowedAccountIds;
-        }
-
-        logger.info('Loading dashboard data:', { 
-          role: userProfile.role,
-          accountCount: accountIds.length 
-        });
-
         // Fetch Accounts First (to have the list for filtering)
         const allAccountsRaw = await fetchMetaAccounts();
         
         // Filter accounts for the dropdown/state
-        // If Admin: All accounts
-        // If Client: Filter by allowedAccountIds
         const mappedAccounts: ResolvedMetaAccount[] = allAccountsRaw.map(a => {
-             // Find franchise name using ID if available
              const franchise = officialFranchises.find(f => f.id === a.franchise_id);
              return {
                  ...a, 
                  id: a.account_id,
-                 franchise_id: a.franchise_id || null, // Ensure compatibility
+                 franchise_id: a.franchise_id || null, 
                  franchise_name: franchise?.name || '',
                  status: (a.status === 'removed' ? 'removed' : 'active') as 'active' | 'removed' | 'disabled'
              };
@@ -206,11 +179,38 @@ export default function App() {
         const filteredAccounts = filterAccountsByAccess(mappedAccounts);
         setMetaAccounts(filteredAccounts);
 
+        // --- FILTER LOGIC: Compute effective account IDs for fetchCampaignData ---
+        // Admin: sem assigned_account_ids → usa IDs de todas as contas carregadas
+        // Client: usa allowedAccountIds (assigned_account_ids do perfil)
+        let effectiveAccountIds: string[] = [];
+
+        if (selectedAccount && selectedAccount !== 'ALL') {
+            // Specific account selected
+            effectiveAccountIds = [selectedAccount];
+        } else if (isAdmin) {
+            // Admin: "ALL" or no selection → all loaded account IDs
+            effectiveAccountIds = filteredAccounts.map(a => a.account_id);
+        } else {
+            // Client: "ALL" or no selection → only their assigned accounts
+            effectiveAccountIds = allowedAccountIds;
+        }
+
+        // For RPCs that still use franchise/account params (KPI, Summary)
+        const serviceAccountFilter = selectedAccount && selectedAccount !== 'ALL' 
+            ? [selectedAccount] 
+            : [];
+
+        logger.info('Loading dashboard data:', { 
+          role: userProfile.role,
+          effectiveIds: effectiveAccountIds.length,
+          filterMode: selectedAccount || 'NONE'
+        });
+
         // Now fetch data
         const [campaignResult, kpiResult, summaryResult] = await Promise.all([
-          fetchCampaignData(start, end, franchiseIdsForService, accountIds),
-          fetchKPIComparison(start, end, franchiseIdsForService, accountIds),
-          fetchSummaryReport(start, end, franchiseIdsForService, accountIds)
+          fetchCampaignData(start, end, effectiveAccountIds),
+          fetchKPIComparison(start, end, franchiseIdsForService, serviceAccountFilter),
+          fetchSummaryReport(start, end, franchiseIdsForService, serviceAccountFilter)
         ]);
 
         setData(campaignResult.current);

@@ -224,7 +224,7 @@ export const ManagerialView: React.FC<Props> = ({ dateRange, accountIds }) => {
 
         {/* Widget 2: Weekly Trends */}
         <WeeklyTrendsWidget data={m.weeklySeries.map(s => ({
-            day: new Date(s.date).toLocaleDateString('pt-BR', { weekday: 'short' }), // Simplified mapping for now
+            day: s.date, // Now comes as 'Segunda', 'Terça', etc.
             spend: s.investment,
             leads: s.leads
         }))} />

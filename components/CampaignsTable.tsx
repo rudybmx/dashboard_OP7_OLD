@@ -70,7 +70,8 @@ export const CampaignsTable: React.FC<Props> = ({ data }) => {
           <tbody className="divide-y divide-slate-50">
             {displayData.length > 0 ? (
               displayData.map((row) => {
-                const cpl = row.custo_por_lead || (row.leads_total > 0 ? row.valor_gasto / row.leads_total : 0);
+                // Use Backend CPL
+                const cpl = row.cpl_total || (row.leads_total > 0 ? row.valor_gasto / row.leads_total : 0);
                 
                 return (
                   <tr key={row.unique_id} className="hover:bg-indigo-50/30 transition-colors">

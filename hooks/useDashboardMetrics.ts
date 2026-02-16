@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { fetchCampaignData } from '../services/supabaseService';
+import { fetchCampaignDataRaw, processCampaignData } from '../services/supabaseService';
+import { calculateMetrics, AdsInsightRow } from '../src/utils/dataAggregation';
 import { CampaignData } from '../types';
 
 export interface DashboardFilter {
@@ -84,46 +85,94 @@ export function useDashboardMetrics(filters: DashboardFilter) {
       try {
         const { startDate, endDate, franchiseFilter, accountFilter } = filters;
         
-        // Fetch data using existing service
-        const result = await fetchCampaignData(startDate, endDate, franchiseFilter, accountFilter);
-        const rows = result.current;
+          
+          // Fetch data using Raw Service (Hybrid Architecture)
+          const rawRows = await fetchCampaignDataRaw(startDate, endDate, accountFilter ?? []);
 
-        if (!mounted) return;
+          if (!mounted) return;
 
-        // --- CALCULATION LOGIC ---
+          // --- CALCULATION LOGIC ---
+          // 1. Calculate Backend-Compatible Metrics (CPL, etc.)
+          const metricsCalc = calculateMetrics(rawRows);
 
-        // Basic KPI Aggregations
-        const investment = rows.reduce((acc, r) => acc + (r.valor_gasto || 0), 0);
-        const purchases = rows.reduce((acc, r) => acc + (r.compras || 0), 0);
-        
-        // Leads Logic: msgs_iniciadas + leads_total + compras
-        const totalMsgsIniciadas = rows.reduce((acc, r) => acc + (r.msgs_iniciadas || 0), 0);
-        const totalLeadsRaw = rows.reduce((acc, r) => acc + (r.leads_total || 0), 0);
-        const totalCompras = purchases;
-        const leads = totalMsgsIniciadas + totalLeadsRaw + totalCompras;
+          const {
+              valor_gasto,
+              compras,
+              leads_total,
+              msgs_iniciadas,
+              impressoes,
+              alcance,
+              cliques_todos,
+              cpl_total,
+          } = metricsCalc;
 
-        const cpl = leads > 0 ? investment / leads : null;
+          // Leads Logic is now centralized in calculateMetrics (it sums leads+msgs+purchases? No, check implementation)
+          // calculateMetrics sums fields individually.
+          // The Hook had specific logic: leads = msgs + leads_total + compras.
+          // Let's replicate that specific logic using the SUMS from calculateMetrics.
+          
+          const totalLeads = msgs_iniciadas + leads_total + compras;
+          
+          // Re-calculate CPL based on this specific "Total Leads" definition if it differs from calculateMetrics's generic one
+          // calculateMetrics CPL = investment / leads_total.
+          // User might want CPL = investment / (leads+msgs+compras).
+          // Let's stick to the hook's previous logic for consistency or update dataAggregation?
+          // The Hook's logic: cpl = investment / leads. (where leads = sum of 3 things).
+          
+          const cpl = totalLeads > 0 ? valor_gasto / totalLeads : null; 
 
-        const impressions = rows.reduce((acc, r) => acc + (r.impressoes || 0), 0);
-        const reach = rows.reduce((acc, r) => acc + (r.alcance || 0), 0);
-        const linkClicks = rows.reduce((acc, r) => acc + (r.cliques_todos || 0), 0);
+          // Funnel
+          const funnel = {
+            impressions: impressoes,
+            reach: alcance,
+            clicks: cliques_todos,
+            leads: totalLeads,
+          };
 
-        // Funnel
-        const funnel = {
-          impressions,
-          reach,
-          clicks: linkClicks,
-          leads,
-        };
+          // Process rows for lists (add images, etc.)
+          // We can do this in parallel or after? 
+          // For Weekly/Objectives we can use rawRows (faster).
+          // For TopCreatives we need images (processCampaignData).
+          
+          const processedRows = await processCampaignData(rawRows);
+          const rows = processedRows; // Keep naming for compatibility below
 
-        // Weekly Series
-        const byDay = groupBy(rows, r => r.date_start);
-        const weeklySeries = Object.entries(byDay).map(([date, dayRows]) => {
-          const inv = dayRows.reduce((acc, r) => acc + (r.valor_gasto || 0), 0);
-          const lds = dayRows.reduce((acc, r) => acc + (r.leads_total || 0) + (r.msgs_iniciadas || 0) + (r.compras || 0), 0);
-          const prs = dayRows.reduce((acc, r) => acc + (r.compras || 0), 0);
-          return { date, investment: inv, leads: lds, purchases: prs };
-        }).sort((a, b) => a.date.localeCompare(b.date));
+        // Weekly Series (Aggregation by Day of Week: Mon-Sun)
+        const daysOfWeek = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+        // Initialize buckets: 0=Mon, 1=Tue, ..., 6=Sun
+        const weekBuckets = daysOfWeek.map(label => ({
+            label,
+            investment: 0,
+            leads: 0,
+            purchases: 0,
+            count: 0
+        }));
+
+        rows.forEach(row => {
+            if (!row.date_start) return;
+            // Parse date (assuming YYYY-MM-DD from DB)
+            const d = new Date(row.date_start);
+            // getDay(): 0=Sun, 1=Mon...6=Sat
+            let dayIdx = d.getUTCDay(); 
+            
+            // Adjust to Mon(0) -> Sun(6) index for our array
+            // Mon(1)->0, Tue(2)->1... Sat(6)->5, Sun(0)->6
+            let bucketIdx = dayIdx === 0 ? 6 : dayIdx - 1;
+
+            if (weekBuckets[bucketIdx]) {
+                weekBuckets[bucketIdx].investment += (row.valor_gasto || 0);
+                weekBuckets[bucketIdx].leads += (row.leads_total || 0) + (row.msgs_iniciadas || 0) + (row.compras || 0);
+                weekBuckets[bucketIdx].purchases += (row.compras || 0);
+                weekBuckets[bucketIdx].count += 1;
+            }
+        });
+
+        const weeklySeries = weekBuckets.map(b => ({
+            date: b.label, // Reuse 'date' field for label to match interface
+            investment: b.investment,
+            leads: b.leads,
+            purchases: b.purchases
+        }));
 
         // Top Objectives
         const byObjective = groupBy(rows, r => r.objective || 'SEM OBJETIVO');
@@ -183,13 +232,13 @@ export function useDashboardMetrics(filters: DashboardFilter) {
           .slice(0, 5);
 
         setMetrics({
-          investment,
-          purchases,
-          leads,
+          investment: valor_gasto,
+          purchases: compras,
+          leads: totalLeads,
           cpl,
-          impressions,
-          reach,
-          linkClicks,
+          impressions: impressoes,
+          reach: alcance,
+          linkClicks: cliques_todos,
           funnel,
           weeklySeries,
           topObjectives,

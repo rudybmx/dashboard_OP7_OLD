@@ -143,7 +143,7 @@ export const SummaryView: React.FC<Props> = ({
 
       // UI Filter: Account (compare by account_id, not nome_conta)
       // Normalize both to handle potential 'act_' prefix mismatches
-      if (selectedClient) {
+      if (selectedClient && selectedClient !== 'ALL') {
         const normSelected = selectedClient.replace(/^act_/i, '');
         const normRow = (row.meta_account_id || '').replace(/^act_/i, '');
         if (normSelected !== normRow) return false;
@@ -232,7 +232,8 @@ export const SummaryView: React.FC<Props> = ({
           <TableBody>
             {sortedData.map((row, index) => {
               const rowResults = row.compras + row.leads + row.conversas;
-              const cpl = row.leads > 0 ? row.investimento / row.leads : 0;
+              // Use Backend CPL if available, else fallback (though backend should always provide it now)
+              const cpl = row.cpl_total ?? (row.leads > 0 ? row.investimento / row.leads : 0);
               const cpc = row.clicks > 0 ? row.investimento / row.clicks : 0;
               const cpr = rowResults > 0 ? row.investimento / rowResults : 0;
               const cpm = row.impressoes > 0 ? (row.investimento / row.impressoes) * 1000 : 0;

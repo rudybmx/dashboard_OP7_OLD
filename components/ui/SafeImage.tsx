@@ -24,6 +24,29 @@ export const SafeImage: React.FC<SafeImageProps> = ({
     useEffect(() => {
         setHasError(false);
         setIsLoading(true);
+
+        // Check for Meta URL expiration (oe parameter)
+        if (src && src.includes('fbcdn.net') && src.includes('oe=')) {
+            try {
+                const urlObj = new URL(src);
+                const oe = urlObj.searchParams.get('oe');
+                if (oe) {
+                    // 'oe' is usually a hex timestamp
+                    const expiryData = parseInt(oe, 16);
+                    const now = Math.floor(Date.now() / 1000);
+                    if (!isNaN(expiryData) && expiryData < now) {
+                        // Expired!
+                        console.warn(`[SafeImage] Skipping expired image: ${src}`);
+                        setHasError(true);
+                        setIsLoading(false);
+                        return;
+                    }
+                }
+            } catch (e) {
+                // Ignore parsing errors, try loading anyway
+            }
+        }
+
         if (imgRef.current && imgRef.current.complete) {
             setIsLoading(false);
         }

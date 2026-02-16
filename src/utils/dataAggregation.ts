@@ -1,116 +1,88 @@
-import { CampaignData } from '../../types';
 
-export interface HierarchyNode {
-  id: string; // unique key
-  name: string;
-  type: 'campaign' | 'adset' | 'ad';
-  status: string;
-  imageUrl?: string;
-  
-  // Base Metrics
-  spend: number;
-  impressions: number;
-  clicks: number;
-  leads: number;
-  purchases: number;
-  
-  // Calculated Metrics
-  ctr: number;
-  cpc: number;
-  cpl: number;
-  roas: number;
+import { Database } from '../../types/database.types';
 
-  children?: HierarchyNode[];
+export type AdsInsightRow = Database['public']['Tables']['ads_insights']['Row'];
+
+export interface AggregatedMetrics {
+    valor_gasto: number;
+    impressoes: number;
+    cliques_todos: number;
+    leads_total: number;
+    compras: number;
+    msgs_iniciadas: number;
+    msgs_conexoes: number;
+    alcance: number;
+    
+    // Calculated
+    cpc: number;
+    ctr: number;
+    cpm: number;
+    cpl_total: number;
+    cpl_conversas: number;
+    cpl_compras: number;
+    frequencia: number;
 }
 
-export const buildCampaignHierarchy = (data: CampaignData[]): HierarchyNode[] => {
-  // Helper to init node
-  const createNode = (id: string, name: string, type: 'campaign' | 'adset' | 'ad', status: string = 'active', imageUrl?: string) => ({
-    id,
-    name,
-    type,
-    status,
-    imageUrl,
-    spend: 0,
-    impressions: 0,
-    clicks: 0,
-    leads: 0,
-    purchases: 0,
-    ctr: 0,
-    cpc: 0,
-    cpl: 0,
-    roas: 0,
-    children: [] as HierarchyNode[]
-  });
+/**
+ * Calculates aggregated metrics from a list of raw ads_insights rows.
+ * Handles division by zero gracefully.
+ */
+export const calculateMetrics = (data: AdsInsightRow[]): AggregatedMetrics => {
+    
+    // 1. Sum basic metrics
+    const totals = data.reduce((acc, row) => ({
+        valor_gasto: acc.valor_gasto + (row.valor_gasto || 0),
+        impressoes: acc.impressoes + (row.impressoes || 0),
+        cliques_todos: acc.cliques_todos + (row.cliques_todos || 0),
+        leads_total: acc.leads_total + (row.leads_total || 0),
+        compras: acc.compras + (row.compras || 0),
+        msgs_iniciadas: acc.msgs_iniciadas + (row.msgs_iniciadas || 0),
+        msgs_conexoes: acc.msgs_conexoes + (row.msgs_conexoes || 0),
+        alcance: acc.alcance + (row.alcance || 0), // Note: Summing reach is an approximation, but standard for simple aggregation
+    }), {
+        valor_gasto: 0,
+        impressoes: 0,
+        cliques_todos: 0,
+        leads_total: 0,
+        compras: 0,
+        msgs_iniciadas: 0,
+        msgs_conexoes: 0,
+        alcance: 0,
+    });
 
-  // Helper to re-calculate rates
-  const updateRates = (node: HierarchyNode) => {
-      node.ctr = node.impressions > 0 ? (node.clicks / node.impressions) * 100 : 0;
-      node.cpc = node.clicks > 0 ? node.spend / node.clicks : 0;
-      node.cpl = node.leads > 0 ? node.spend / node.leads : 0;
-      node.roas = 0; // Standardize
-  };
+    // 2. Calculate derived metrics
+    const cpc = totals.cliques_todos > 0 ? totals.valor_gasto / totals.cliques_todos : 0;
+    const ctr = totals.impressoes > 0 ? (totals.cliques_todos / totals.impressoes) * 100 : 0;
+    const cpm = totals.impressoes > 0 ? (totals.valor_gasto / totals.impressoes) * 1000 : 0;
+    
+    const cpl_total = totals.leads_total > 0 ? totals.valor_gasto / totals.leads_total : 0;
+    const cpl_conversas = totals.msgs_iniciadas > 0 ? totals.valor_gasto / totals.msgs_iniciadas : 0;
+    const cpl_compras = totals.compras > 0 ? totals.valor_gasto / totals.compras : 0;
+    
+    const frequencia = totals.alcance > 0 ? totals.impressoes / totals.alcance : 0;
 
-  const hierarchy: HierarchyNode[] = [];
-  const hierarchyMap = new Map<string, HierarchyNode>(); // Campaign ID -> Node
+    return {
+        ...totals,
+        cpc,
+        ctr,
+        cpm,
+        cpl_total,
+        cpl_conversas,
+        cpl_compras,
+        frequencia
+    };
+};
 
-  data.forEach(row => {
-      const campaignName = row.campaign_name || 'Campanha Desconhecida';
-      const adSetName = row.adset_name || 'Conjunto Desconhecido';
-      const adName = row.ad_name || 'Anúncio Desconhecido';
-
-      const campaignId = `cmp-${campaignName}`;
-      const adSetId = `ads-${campaignName}-${adSetName}`;
-      const adId = row.unique_id || `ad-${Math.random()}`; // Fallback ID
-
-      // 1. Campaign
-      let cmpNode = hierarchyMap.get(campaignId);
-      if (!cmpNode) {
-          cmpNode = createNode(campaignId, campaignName, 'campaign');
-          hierarchyMap.set(campaignId, cmpNode);
-          hierarchy.push(cmpNode);
-      }
-
-      // 2. AdSet
-      let adSetNode = cmpNode.children!.find(c => c.id === adSetId);
-      if (!adSetNode) {
-          adSetNode = createNode(adSetId, adSetName, 'adset');
-          cmpNode.children!.push(adSetNode);
-      }
-
-      // 3. Ad (Leaf)
-      const adNode = createNode(adId, adName, 'ad', 'active', row.ad_image_url);
-      adNode.spend = row.valor_gasto || 0;
-      adNode.impressions = row.impressoes || 0;
-      adNode.clicks = row.cliques_todos || 0;
-      adNode.leads = row.msgs_iniciadas || 0;
-      adNode.purchases = row.compras || 0;
-      updateRates(adNode);
-
-      adSetNode.children!.push(adNode);
-
-      // Aggregate Up to AdSet
-      adSetNode.spend += adNode.spend;
-      adSetNode.impressions += adNode.impressions;
-      adSetNode.clicks += adNode.clicks;
-      adSetNode.leads += adNode.leads;
-      adSetNode.purchases += adNode.purchases;
-      
-      // Aggregate Up to Campaign
-      cmpNode.spend += adNode.spend;
-      cmpNode.impressions += adNode.impressions;
-      cmpNode.clicks += adNode.clicks;
-      cmpNode.leads += adNode.leads;
-      cmpNode.purchases += adNode.purchases;
-  });
-
-  // Final Pass: Update Rates for aggregated nodes
-  hierarchy.forEach(cmp => {
-      updateRates(cmp);
-      cmp.children?.forEach(adset => {
-          updateRates(adset);
-      });
-  });
-
-  return hierarchy;
+/**
+ * Helper to group data by a key (e.g., account_id, campaign_name)
+ */
+export const groupDataBy = (data: AdsInsightRow[], key: keyof AdsInsightRow) => {
+    return data.reduce((acc, row) => {
+        const groupKey = String(row[key] || 'Unknown');
+        if (!acc[groupKey]) {
+            acc[groupKey] = [];
+        }
+        acc[groupKey].push(row);
+        return acc;
+    }, {} as Record<string, AdsInsightRow[]>);
 };
