@@ -16,16 +16,33 @@ import { useQuery } from '@tanstack/react-query';
 import { logger } from './lib/logger';
 
 
-// Lazy load views for code splitting
-const SummaryView = lazy(() => import('./components/SummaryView'));
-const ManagerialView = lazy(() => import('./components/ManagerialView'));
-const DashboardOverview = lazy(() => import('./components/DashboardOverview'));
-const CampaignsView = lazy(() => import('./components/CampaignsView'));
-const CreativesView = lazy(() => import('./components/CreativesView'));
-const DemographicsGeoView = lazy(() => import('./components/DemographicsGeoView'));
-const AdsTableView = lazy(() => import('./components/AdsTableView'));
-const SettingsView = lazy(() => import('./components/SettingsView'));
-const PlanningDashboardView = lazy(() => import('./components/PlanningDashboardView'));
+// Retry wrapper for lazy imports — handles stale chunk 404s after new deploys
+function lazyWithRetry(importFn: () => Promise<any>) {
+  return lazy(() =>
+    importFn().catch((err) => {
+      // Avoid infinite reload loop: only reload once per session
+      const hasReloaded = sessionStorage.getItem('chunk_reload');
+      if (!hasReloaded) {
+        sessionStorage.setItem('chunk_reload', '1');
+        window.location.reload();
+        return new Promise(() => {}); // Never resolves — page will reload
+      }
+      sessionStorage.removeItem('chunk_reload');
+      throw err; // Let ErrorBoundary handle after 1 retry
+    })
+  );
+}
+
+// Lazy load views for code splitting (with auto-retry on stale chunks)
+const SummaryView = lazyWithRetry(() => import('./components/SummaryView'));
+const ManagerialView = lazyWithRetry(() => import('./components/ManagerialView'));
+const DashboardOverview = lazyWithRetry(() => import('./components/DashboardOverview'));
+const CampaignsView = lazyWithRetry(() => import('./components/CampaignsView'));
+const CreativesView = lazyWithRetry(() => import('./components/CreativesView'));
+const DemographicsGeoView = lazyWithRetry(() => import('./components/DemographicsGeoView'));
+const AdsTableView = lazyWithRetry(() => import('./components/AdsTableView'));
+const SettingsView = lazyWithRetry(() => import('./components/SettingsView'));
+const PlanningDashboardView = lazyWithRetry(() => import('./components/PlanningDashboardView'));
 
 export default function App() {
 
