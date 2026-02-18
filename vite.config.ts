@@ -16,9 +16,9 @@ export default defineConfig(({ mode }) => {
           registerType: 'autoUpdate',
           includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'logo_op7_azul.svg'],
           manifest: {
-            name: 'OP7 Performance Dashboard',
-            short_name: 'OP7 Dashboard',
-            description: 'Dashboard de performance para gestão de campanhas de marketing digital',
+            name: 'OP7 Performance',
+            short_name: 'OP7',
+            description: 'Plataforma de gestão de performance.',
             theme_color: '#4F46E5',
             background_color: '#F8FAFC',
             display: 'standalone',
@@ -27,7 +27,7 @@ export default defineConfig(({ mode }) => {
             lang: 'pt-BR',
             icons: [
               {
-                src: '/logo_op7_azul.svg',
+                src: 'https://docs.qozt.com.br/logo/op7/logo_azul_recorte.svg',
                 sizes: 'any',
                 type: 'image/svg+xml',
                 purpose: 'any maskable'

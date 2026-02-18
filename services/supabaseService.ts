@@ -409,7 +409,23 @@ export const fetchSummaryReport = async (
             throw error;
         }
 
-        return (data as SummaryReportRow[]) || [];
+        // Map RPC column names → SummaryReportRow field names
+        const mapped: SummaryReportRow[] = ((data as any[]) || []).map((row: any) => ({
+            meta_account_id: row.account_id || '',
+            nome_conta: row.account_name || '',
+            franquia: row.franqueado || '',
+            saldo_atual: Number(row.saldo_balanco) || 0,
+            investimento: Number(row.total_gasto) || 0,
+            leads: Number(row.total_leads) || 0,
+            compras: Number(row.total_compras) || 0,
+            conversas: 0, // RPC doesn't return this separately
+            clicks: Number(row.total_cliques) || 0,
+            impressoes: Number(row.total_impressoes) || 0,
+            alcance: 0, // RPC doesn't return reach separately
+            cpl_total: row.cpa != null ? Number(row.cpa) : undefined,
+        }));
+
+        return mapped;
 
     } catch (err) {
         logger.error('[fetchSummaryReport] Failed:', err);

@@ -39,7 +39,7 @@ export function Sidebar({ className, activeView, setActiveView, isDemoMode, user
   return (
     <div className={cn("flex flex-col h-full bg-card border-r py-6 px-4", className)}>
       <div className="mb-8 px-2 flex justify-center">
-        <img src="https://docs.qozt.com.br/logo/bihmks/logo_bihmks.svg" alt="OP7 Performance" className="h-20 w-auto" />
+        <img src="https://docs.qozt.com.br/logo/op7/logo_azul_recorte.svg" alt="OP7 Performance" className="h-20 w-auto" />
       </div>
 
       <nav className="flex-1 space-y-2">

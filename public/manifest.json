@@ -1,7 +1,7 @@
 {
-  "name": "Bihmks AI-First",
-  "short_name": "Bihmks",
-  "description": "Plataforma AI-First para gestão de performance.",
+  "name": "OP7 Performance",
+  "short_name": "OP7",
+  "description": "Plataforma de gestão de performance.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#F8FAFC",
@@ -11,7 +11,7 @@
   "lang": "pt-BR",
   "icons": [
     {
-      "src": "https://docs.qozt.com.br/logo/bihmks/logo_bihmks.svg",
+      "src": "https://docs.qozt.com.br/logo/op7/logo_azul_recorte.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"
