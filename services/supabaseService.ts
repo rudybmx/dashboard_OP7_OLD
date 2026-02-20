@@ -410,19 +410,20 @@ export const fetchSummaryReport = async (
         }
 
         // Map RPC column names → SummaryReportRow field names
+        // Suporta tanto o mapping antigo quanto o novo (após atualizar a RPC no BD)
         const mapped: SummaryReportRow[] = ((data as any[]) || []).map((row: any) => ({
-            meta_account_id: row.account_id || '',
-            nome_conta: row.account_name || '',
-            franquia: row.franqueado || '',
-            saldo_atual: Number(row.saldo_balanco) || 0,
-            investimento: Number(row.total_gasto) || 0,
-            leads: Number(row.total_leads) || 0,
-            compras: Number(row.total_compras) || 0,
-            conversas: 0, // RPC doesn't return this separately
-            clicks: Number(row.total_cliques) || 0,
-            impressoes: Number(row.total_impressoes) || 0,
-            alcance: 0, // RPC doesn't return reach separately
-            cpl_total: row.cpa != null ? Number(row.cpa) : undefined,
+            meta_account_id: row.meta_account_id || row.account_id || '',
+            nome_conta: row.nome_conta || row.account_name || '',
+            franquia: row.franquia || row.franqueado || '',
+            saldo_atual: Number(row.saldo_atual ?? row.saldo_balanco) || 0,
+            investimento: Number(row.investimento ?? row.total_gasto) || 0,
+            leads: Number(row.leads ?? row.total_leads) || 0,
+            compras: Number(row.compras ?? row.total_compras) || 0,
+            conversas: Number(row.conversas ?? row.msgs_iniciadas) || 0, // RPC NOVA: conversas
+            clicks: Number(row.clicks ?? row.total_cliques) || 0,
+            impressoes: Number(row.impressoes ?? row.total_impressoes) || 0,
+            alcance: Number(row.alcance ?? 0) || 0, // RPC NOVA: alcance
+            cpl_total: row.cpl_total != null ? Number(row.cpl_total) : (row.cpa != null ? Number(row.cpa) : undefined),
         }));
 
         return mapped;
