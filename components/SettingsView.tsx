@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { BMSettingsTab } from './BMSettingsTab';
-
 import { UsersSettingsTab } from './UsersSettingsTab';
 import { CategoriesSettingsTab } from './CategoriesSettingsTab';
 import { PlanningTableView } from './PlanningTableView';
+import { AccountGroupsTab } from '../src/features/cluster-management/ui/AccountGroupsTab';
 import { SettingsDataProvider } from '../context/SettingsDataContext';
-import { LayoutList, Store, Shield, Tags } from 'lucide-react';
+import { LayoutList, Store, Shield, Tags, Folder } from 'lucide-react';
 
 export const SettingsView: React.FC<{ userRole?: string }> = ({ userRole }) => {
     // Legacy hook removed to fix duplicate auth state bug
@@ -13,7 +13,7 @@ export const SettingsView: React.FC<{ userRole?: string }> = ({ userRole }) => {
 
     // Derive permission directly from passed prop (Single Source of Truth)
     const canManageUsers = userRole === 'admin';
-    const [activeTab, setActiveTab] = useState<'accounts' | 'franchises' | 'users' | 'categories'>('accounts');
+    const [activeTab, setActiveTab] = useState<'accounts' | 'franchises' | 'users' | 'categories' | 'groups'>('accounts');
 
     // Security Guard using useEffect pattern for client-side protection
     React.useEffect(() => {
@@ -58,6 +58,19 @@ export const SettingsView: React.FC<{ userRole?: string }> = ({ userRole }) => {
                             Cadastro Categorias
                         </button>
 
+                        <button
+                            onClick={() => setActiveTab('groups')}
+                            className={`
+                                pb-4 text-sm font-medium flex items-center gap-2 border-b-2 transition-all
+                                ${activeTab === 'groups'
+                                    ? 'border-indigo-600 text-indigo-600'
+                                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}
+                            `}
+                        >
+                            <Folder size={18} />
+                            Grupos de Contas
+                        </button>
+
                         {canManageUsers && (
                             <button
                                 onClick={() => setActiveTab('users')}
@@ -84,6 +97,10 @@ export const SettingsView: React.FC<{ userRole?: string }> = ({ userRole }) => {
                     <div style={{ display: activeTab === 'categories' ? 'block' : 'none' }}>
                         <CategoriesSettingsTab />
                     </div>
+                    <div style={{ display: activeTab === 'groups' ? 'block' : 'none' }}>
+                        <AccountGroupsTab />
+                    </div>
+
                     {canManageUsers && (
                         <div style={{ display: activeTab === 'users' ? 'block' : 'none' }}>
                             <UsersSettingsTab />

@@ -43,16 +43,19 @@ interface ManagerialDataParams {
     p_account_filter: string[] | null;
 }
 
+// Campos retornados pelo RPC get_all_meta_accounts (migration 20260318000003)
 interface MetaAccountRPCRow {
     account_id: string;
-    nome_original: string | null;
-    nome_ajustado: string | null;
-    franqueado: string | null;
+    account_name: string | null;      // t.nome_original
+    display_name: string | null;      // COALESCE(nome_ajustado, nome_original)
+    franchise_id: string | null;
+    franchise_name: string | null;
+    group_id: string | null;
+    group_name: string | null;
     categoria_id: string | null;
-    status_interno: string;
+    current_balance: number | null;
+    status: string | null;            // 'active' | 'disabled'
     client_visibility: boolean | null;
-    saldo_balanco: string | number | null;
-    updated_at: string | null;
     status_meta: string | null;
     motivo_bloqueio: string | null;
     total_gasto: number | null;
@@ -456,19 +459,19 @@ export const fetchMetaAccounts = async (): Promise<MetaAdAccount[]> => {
         return ((data as MetaAccountRPCRow[]) || []).map(row => ({
             id: row.account_id,
             account_id: row.account_id,
-            account_name: row.nome_original || 'Sem Nome',
-            display_name: row.nome_ajustado || '',
-            franchise_id: row.franqueado || '',
-            franchise_name: '',
+            account_name: row.account_name || 'Sem Nome',
+            display_name: row.display_name || '',
+            franchise_id: row.franchise_id || '',
+            franchise_name: row.franchise_name || '',
             categoria_id: row.categoria_id || '',
-            status: (row.status_interno === 'removed' ? 'removed' : 'active') as 'removed' | 'active',
-            client_visibility: row.client_visibility ?? false,
-            current_balance: safeFloat(row.saldo_balanco),
-            last_sync: row.updated_at || new Date().toISOString(),
+            status: (row.status === 'disabled' ? 'removed' : 'active') as 'removed' | 'active',
+            client_visibility: row.client_visibility ?? true,
+            current_balance: row.current_balance ?? 0,
+            last_sync: new Date().toISOString(),
             status_meta: row.status_meta || undefined,
             motivo_bloqueio: row.motivo_bloqueio || undefined,
-            total_gasto: safeFloat(row.total_gasto),
-            status_interno: row.status_interno || 'A Classificar',
+            total_gasto: row.total_gasto ?? 0,
+            status_interno: row.status || 'A Classificar',
         }));
 
     } catch (err) {

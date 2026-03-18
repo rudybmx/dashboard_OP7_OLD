@@ -4,6 +4,7 @@ import App from './App';
 import './index.css';
 import { AuthProvider } from './src/auth/AuthProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { FiltersProvider } from './src/features/filters';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -28,7 +29,9 @@ root.render(
   <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <App />
+        <FiltersProvider>
+          <App />
+        </FiltersProvider>
       </AuthProvider>
     </QueryClientProvider>
   </ErrorBoundary>

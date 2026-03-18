@@ -156,9 +156,13 @@ const BMSettingsTabComponent: React.FC = () => {
                 const pendingUpdates = meta?.pendingUpdates || {};
                 const handleLocalChange = meta?.handleLocalChange;
 
-                const val = (pendingUpdates[row.original.id] && pendingUpdates[row.original.id].display_name !== undefined) 
-                    ? pendingUpdates[row.original.id].display_name 
-                    : (row.original.display_name || '');
+                // display_name do RPC = COALESCE(nome_ajustado, nome_original).
+                // Se for igual ao account_name, não há nome ajustado → mostrar vazio com placeholder.
+                const hasCustomName = row.original.display_name &&
+                    row.original.display_name !== row.original.account_name;
+                const val = (pendingUpdates[row.original.id] && pendingUpdates[row.original.id].display_name !== undefined)
+                    ? pendingUpdates[row.original.id].display_name
+                    : (hasCustomName ? row.original.display_name : '');
 
                 return (
                     <input

@@ -6,12 +6,12 @@ import { LoginView } from './components/LoginView';
 import { fetchCampaignData, fetchFranchises, fetchKPIComparison, fetchSummaryReport, fetchMetaAccounts } from './services/supabaseService';
 import { CampaignData, Franchise, SummaryReportRow } from './types';
 import { Loader2, Shield, AlertTriangle } from 'lucide-react';
-import { RangeValue } from './components/ui/calendar';
-import { subDays } from 'date-fns';
 import { useAuth } from './src/auth/useAuth';
 import { ViewLoader } from './components/ViewLoader';
 import { useUserAccess } from './src/auth/useUserAccess';
 import { ResolvedMetaAccount, ResolvedFranchise } from './src/auth/types';
+import { useFilters } from './src/features/filters';
+import { useClusterAccounts } from './src/entities/cluster';
 import { useQuery } from '@tanstack/react-query';
 import { logger } from './lib/logger';
 
@@ -19,7 +19,11 @@ import { logger } from './lib/logger';
 // Retry wrapper for lazy imports — handles stale chunk 404s after new deploys
 function lazyWithRetry(importFn: () => Promise<any>) {
   return lazy(() =>
-    importFn().catch((err) => {
+    importFn().then((mod) => {
+      // On success, clear any previous chunk-reload flag
+      sessionStorage.removeItem('chunk_reload');
+      return mod;
+    }).catch((err) => {
       // Avoid infinite reload loop: only reload once per session
       const hasReloaded = sessionStorage.getItem('chunk_reload');
       if (!hasReloaded) {
@@ -27,15 +31,14 @@ function lazyWithRetry(importFn: () => Promise<any>) {
         window.location.reload();
         return new Promise(() => {}); // Never resolves — page will reload
       }
-      sessionStorage.removeItem('chunk_reload');
       throw err; // Let ErrorBoundary handle after 1 retry
     })
   );
 }
 
 // Lazy load views for code splitting (with auto-retry on stale chunks)
-const SummaryView = lazyWithRetry(() => import('./components/SummaryView'));
-const ManagerialView = lazyWithRetry(() => import('./components/ManagerialView'));
+const SummaryView = lazyWithRetry(() => import('./src/pages/SummaryView'));
+const ManagerialView = lazyWithRetry(() => import('./src/pages/ManagerialView'));
 const DashboardOverview = lazyWithRetry(() => import('./components/DashboardOverview'));
 const CampaignsView = lazyWithRetry(() => import('./components/CampaignsView'));
 const CreativesView = lazyWithRetry(() => import('./components/CreativesView'));
@@ -54,49 +57,49 @@ export default function App() {
   const [loading, setLoading] = useState<boolean>(true);
   const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<'dashboard' | 'settings' | 'campaigns' | 'creatives' | 'executive' | 'demographics' | 'ads' | 'summary' | 'planning'>('summary');
+  const VALID_VIEWS = ['dashboard', 'settings', 'campaigns', 'creatives', 'executive', 'demographics', 'ads', 'summary', 'planning'] as const;
+  type ActiveView = typeof VALID_VIEWS[number];
+
+  const getInitialView = (): ActiveView => {
+    const hash = window.location.hash.replace('#', '') as ActiveView;
+    return VALID_VIEWS.includes(hash) ? hash : 'summary';
+  };
+
+  const [activeView, setActiveView] = useState<ActiveView>(getInitialView);
+
+  const navigateTo = (view: ActiveView) => {
+    window.location.hash = view;
+    setActiveView(view);
+  };
+
+  // Sync activeView when user navigates with browser back/forward buttons
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.replace('#', '') as ActiveView;
+      const view = VALID_VIEWS.includes(hash) ? hash : 'summary';
+      setActiveView(view);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
   const [formattedComparisonData, setFormattedComparisonData] = useState<CampaignData[]>([]);
   const [kpiRpcData, setKpiRpcData] = useState<any>(null);
   const [summaryData, setSummaryData] = useState<SummaryReportRow[]>([]);
   const [metaAccounts, setMetaAccounts] = useState<any[]>([]);
   const [isDataLoaded, setIsDataLoaded] = useState<boolean>(false);
 
-  // Filter States
-  // Filter States - Priority: LocalStorage > Default (URL Filters Removed)
-  // Filter States - Priority: LocalStorage > Default (URL Filters Removed)
-  /* Franchise filter removed per user request
-  const [selectedFranchise, setSelectedFranchise] = useState<string>(() => {
-    return localStorage.getItem('op7_franchise_filter') || '';
-  });
-  */
+  // Filter States — centralized via FiltersProvider
+  const { selectedAccounts, setSelectedAccounts, selectedCluster, dateRange, setDateRange } = useFilters();
 
-  const [selectedAccount, setSelectedAccount] = useState<string>(() => {
-    return localStorage.getItem('op7_account_filter') || 'ALL';
-  });
+  // Cluster accounts for effectiveAccountIds computation
+  const { data: clusterAccountList = [] } = useClusterAccounts(
+    selectedCluster !== 'ALL' ? selectedCluster : null
+  );
 
-  const [dateRange, setDateRange] = useState<RangeValue | null>(() => {
-    const savedDates = localStorage.getItem('op7_date_range');
-    if (savedDates) {
-      try {
-        const parsed = JSON.parse(savedDates);
-        return {
-          start: new Date(parsed.start),
-          end: new Date(parsed.end)
-        };
-      } catch (e) {
-        logger.error("Failed to parse saved dates", e);
-      }
-    }
-    return {
-      start: subDays(new Date(), 1),
-      end: subDays(new Date(), 1)
-    };
-  });
-
-  // Clean URL parameters on mount
+  // Clean URL query params on mount — preserve the hash
   useEffect(() => {
     if (window.location.search) {
-      const cleanUrl = window.location.pathname;
+      const cleanUrl = window.location.pathname + window.location.hash;
       window.history.replaceState({}, '', cleanUrl);
     }
   }, []);
@@ -112,10 +115,38 @@ export default function App() {
   // --- ACCESS CONTROL HOOK ---
   const {
     isAdmin,
-    isClient,
+    isManager,
     allowedAccountIds,
+    canViewSettings,
+    canAccessModule,
+    allowedRoutes,
     filterAccountsByAccess
   } = useUserAccess(userProfile);
+
+  // Guard: verifica se o usuário pode acessar a view atual.
+  // Usa allowedRoutes (do módulo) quando disponível,
+  // senão cai no mapa legado de roles.
+  const LEGACY_ROLE_VIEW_MAP: Record<string, string[]> = {
+    dashboard:    ['superadmin', 'admin', 'manager', 'client', 'viewer'],
+    summary:      ['superadmin', 'admin', 'manager', 'client'],
+    executive:    ['superadmin', 'admin', 'manager'],
+    campaigns:    ['superadmin', 'admin', 'manager'],
+    creatives:    ['superadmin', 'admin', 'manager'],
+    demographics: ['superadmin', 'admin', 'manager'],
+    ads:          ['superadmin', 'admin', 'manager'],
+    planning:     ['superadmin', 'admin'],
+    settings:     ['superadmin', 'admin'],
+  };
+
+  const canAccessView = (view: string): boolean => {
+    // Se o usuário tem permissões de módulo carregadas, usa elas
+    if (userProfile?.module_permissions?.length) {
+      return allowedRoutes.includes(view);
+    }
+    // Fallback legado por role
+    const allowed = LEGACY_ROLE_VIEW_MAP[view] ?? [];
+    return allowed.includes(userProfile?.role ?? '');
+  };
 
   // --- DATA FETCHING (QUERIES) ---
   // Load franchises and accounts once (or when session changes)
@@ -201,26 +232,24 @@ export default function App() {
         // Client: usa allowedAccountIds (assigned_account_ids do perfil)
         let effectiveAccountIds: string[] = [];
 
-        if (selectedAccount && selectedAccount !== 'ALL') {
-            // Specific account selected
-            effectiveAccountIds = [selectedAccount];
+        if (selectedAccounts.length > 0) {
+            // Specific accounts selected by user
+            effectiveAccountIds = selectedAccounts;
         } else if (isAdmin) {
-            // Admin: "ALL" or no selection → all loaded account IDs
+            // Admin: no selection → all loaded account IDs
             effectiveAccountIds = filteredAccounts.map(a => a.account_id);
         } else {
-            // Client: "ALL" or no selection → only their assigned accounts
+            // Client: no selection → only their assigned accounts
             effectiveAccountIds = allowedAccountIds;
         }
 
         // For RPCs that still use franchise/account params (KPI, Summary)
-        const serviceAccountFilter = selectedAccount && selectedAccount !== 'ALL' 
-            ? [selectedAccount] 
-            : [];
+        const serviceAccountFilter = selectedAccounts.length > 0 ? selectedAccounts : [];
 
         logger.info('Loading dashboard data:', { 
           role: userProfile.role,
           effectiveIds: effectiveAccountIds.length,
-          filterMode: selectedAccount || 'NONE'
+          filterMode: selectedAccounts.join(',') || 'ALL'
         });
 
         // Now fetch data
@@ -230,10 +259,37 @@ export default function App() {
           fetchSummaryReport(start, end, franchiseIdsForService, serviceAccountFilter)
         ]);
 
-        setData(campaignResult.current);
-        setFormattedComparisonData(campaignResult.previous);
+        // Regra 2: Nome Dashboard → se preenchido usa display_name, senão usa account_name.
+        // Aplicado aqui para que TODAS as views herdem o nome correto automaticamente.
+        // filteredAccounts já passou por filterAccountsByAccess (só visíveis chegam aqui)
+        const displayNameMap = new Map<string, string>(
+          filteredAccounts.map(a => [
+            a.account_id,
+            (a.display_name && a.display_name.trim()) ? a.display_name.trim() : a.account_name,
+          ])
+        );
+
+        const applyDisplayName = (items: CampaignData[]): CampaignData[] =>
+          items.map(item => ({
+            ...item,
+            account_name:
+              displayNameMap.get(item.account_id) ||
+              displayNameMap.get(item.account_id?.replace(/^act_/i, '')) ||
+              item.account_name,
+          }));
+
+        setData(applyDisplayName(campaignResult.current));
+        setFormattedComparisonData(applyDisplayName(campaignResult.previous));
         setKpiRpcData(kpiResult);
-        setSummaryData(summaryResult);
+        // Aplica display_name também no resumo gerencial
+        // Tenta account_id direto e sem prefixo act_ (RPC devolve sem prefixo)
+        setSummaryData(summaryResult.map(row => ({
+          ...row,
+          nome_conta:
+            displayNameMap.get(row.meta_account_id) ||
+            displayNameMap.get(row.meta_account_id?.replace(/^act_/i, '')) ||
+            row.nome_conta,
+        })));
         
         setIsDemoMode(campaignResult.isMock);
         if (campaignResult.isMock) setConnectionError(campaignResult.error);
@@ -250,30 +306,14 @@ export default function App() {
     
     // Dependencies: Stable ones only
   }, [
-    session, 
-    userProfile?.id, 
-    dateRange?.start?.toISOString(), 
+    session,
+    userProfile?.id,
+    dateRange?.start?.toISOString(),
     dateRange?.end?.toISOString(),
-    // selectedFranchise, // Removed dependency
-    selectedAccount
-    // availableFranchises removed to prevent loop (it depends on metaAccounts which is set here)
+    JSON.stringify(selectedAccounts),
   ]);
 
-  // Sync Filters to LocalStorage (URL Sync Removed)
-  useEffect(() => {
-    // localStorage.setItem('op7_franchise_filter', selectedFranchise);
-    localStorage.setItem('op7_account_filter', selectedAccount);
-  }, [selectedAccount]);
-
-  // Save Dates to LocalStorage
-  useEffect(() => {
-    if (dateRange?.start && dateRange?.end) {
-      localStorage.setItem('op7_date_range', JSON.stringify({
-        start: dateRange.start.toISOString(),
-        end: dateRange.end.toISOString()
-      }));
-    }
-  }, [dateRange]);
+  // Filtros sincronizados via FiltersProvider (localStorage gerenciado lá)
 
   // Dynamic Balance Calculation (Reactive to UI Filters + RBAC)
   const currentFilteredBalance = useMemo(() => {
@@ -283,12 +323,11 @@ export default function App() {
     
     return metaAccounts
       .filter(acc => {
-        if (selectedAccount === 'ALL') return true; // Sum matching accounts
-        const matchAccount = !selectedAccount || acc.account_id === selectedAccount || acc.account_name === selectedAccount;
-        return matchAccount;
+        if (selectedAccounts.length === 0) return true;
+        return selectedAccounts.includes(acc.account_id);
       })
       .reduce((sum, acc) => sum + (acc.current_balance || 0), 0);
-  }, [metaAccounts, selectedAccount]);
+  }, [metaAccounts, selectedAccounts]);
 
   // Separate Effect for Franchises (Only once or when profile changes)
   useEffect(() => {
@@ -309,46 +348,22 @@ export default function App() {
   // useEffect(() => { setSelectedAccount(''); }, [selectedFranchise]);
 
   const filteredData = useMemo(() => {
-    // RBAC: Require account selection - no data shown without specific account
-    if (!selectedAccount) return [];
-    
+    if (selectedAccounts.length === 0) return data; // Show all loaded data
+    const selectedSet = new Set(selectedAccounts.map(id => id.replace(/^act_/i, '')));
     return data.filter(d => {
-      // Logic for ALL
-      if (selectedAccount === 'ALL') {
-          // If Admin, generic ALL shows everything.
-          // If Client, data is already restricted by fetching logic (loadData sends restricted IDs).
-          // So filtering by "ALL" here just means "don't filter by specific account ID".
-          return true;
-      }
-
-      // Handle both 'act_' prefixed and numeric account IDs
-      const normalizedSelected = selectedAccount ? selectedAccount.replace(/^act_/i, '') : '';
-      const matchAccount = !selectedAccount ||
-        d.account_id === selectedAccount ||
-        d.account_id === normalizedSelected ||
-        d.account_name === selectedAccount;
-
-      return matchAccount; // matchFranchise && matchAccount;
+      const norm = (d.account_id || '').replace(/^act_/i, '');
+      return selectedSet.has(norm) || selectedSet.has(d.account_id);
     });
-  }, [selectedAccount, data]);
+  }, [selectedAccounts, data]);
 
   const comparisonData = useMemo(() => {
-    // RBAC: Require account selection - no data shown without specific account
-    if (!selectedAccount) return [];
-    
+    if (selectedAccounts.length === 0) return formattedComparisonData;
+    const selectedSet = new Set(selectedAccounts.map(id => id.replace(/^act_/i, '')));
     return formattedComparisonData.filter(d => {
-       if (selectedAccount === 'ALL') return true;
-
-      // Handle both 'act_' prefixed and numeric account IDs
-      const normalizedSelected = selectedAccount ? selectedAccount.replace(/^act_/i, '') : '';
-      const matchAccount = !selectedAccount ||
-        d.account_id === selectedAccount ||
-        d.account_id === normalizedSelected ||
-        d.account_name === selectedAccount;
-
-      return matchAccount; // matchFranchise && matchAccount;
+      const norm = (d.account_id || '').replace(/^act_/i, '');
+      return selectedSet.has(norm) || selectedSet.has(d.account_id);
     });
-  }, [selectedAccount, formattedComparisonData]);
+  }, [selectedAccounts, formattedComparisonData]);
 
   // Auth Guards & Loading
   if (authLoading) return (
@@ -378,13 +393,13 @@ export default function App() {
   return (
     <div className="flex h-screen w-full bg-slate-50 overflow-hidden">
       <aside className="hidden lg:flex w-72 flex-col border-r bg-card h-full">
-        <Sidebar activeView={activeView} setActiveView={setActiveView} isDemoMode={isDemoMode} userRole={userProfile?.role} userName={userProfile?.name} userEmail={userProfile?.email} className="border-none h-full" />
+        <Sidebar activeView={activeView} setActiveView={navigateTo} isDemoMode={isDemoMode} userRole={userProfile?.role} userName={userProfile?.name} userEmail={userProfile?.email} className="border-none h-full" />
       </aside>
 
       <div className="flex flex-1 flex-col overflow-hidden h-full">
         <header className="relative z-50 flex-none">
           <div className="lg:hidden p-4 bg-white border-b flex items-center justify-between">
-            <MobileNav activeView={activeView} setActiveView={setActiveView} isDemoMode={isDemoMode} />
+            <MobileNav activeView={activeView} setActiveView={navigateTo} isDemoMode={isDemoMode} />
             <span className="font-bold">OP7 PERFORMANCE</span>
           </div>
           {activeView === 'settings' ? (
@@ -394,13 +409,6 @@ export default function App() {
           ) : (
             <DashboardHeader
               title={activeView === 'dashboard' ? 'Visão Gerencial' : activeView === 'summary' ? 'Resumo Gerencial' : activeView === 'executive' ? 'Visão Executiva' : activeView === 'campaigns' ? 'Performance de Campanhas' : activeView === 'creatives' ? 'Galeria de Criativos' : activeView === 'ads' ? 'Detalhamento de Anúncios' : activeView === 'demographics' ? 'Inteligência de Público' : activeView === 'planning' ? 'Planejamento Analítico' : 'Dashboard'}
-              data={data}
-              selectedClient={selectedAccount}
-              setSelectedClient={setSelectedAccount}
-              dateRange={dateRange}
-              setDateRange={setDateRange}
-              isLocked={availableFranchises.length === 1 && userProfile?.role !== 'admin'}
-              availableFranchises={availableFranchises}
               metaAccounts={availableAccounts}
               userRole={userProfile?.role}
               assignedAccountIds={allowedAccountIds}
@@ -415,43 +423,21 @@ export default function App() {
             <Suspense fallback={<ViewLoader />}>
               {activeView === 'summary' && (
                 <SummaryView
-                  data={filteredData}
-                  selectedFranchisee={''} // Logic Removed
-                  selectedClient={selectedAccount}
-                  dateRange={dateRange}
-                  allowedFranchises={availableFranchises.map(f => f.name)}
-                  allowedAccounts={allowedAccountIds}
-                  externalSummaryData={summaryData}
-                  externalLoading={loading && !isDataLoaded}
+                  summaryData={summaryData}
+                  loading={loading && !isDataLoaded}
                 />
               )}
               {activeView === 'planning' && <PlanningDashboardView allowedFranchises={availableFranchises.map(f => f.name)} userRole={userProfile?.role} />}
               {activeView === 'dashboard' && (
                 <ManagerialView
                   dateRange={dateRange}
-                  accountIds={(() => {
-                      // Logic reused from loadData to determining effective Account IDs
-                      const normalizedSelected = selectedAccount ? selectedAccount.replace(/^act_/i, '') : '';
-                      
-                      if (selectedAccount === 'ALL') {
-                          // Allow 'ALL' to signify "All accessible accounts"
-                          // Admin: all visible (use availableAccounts.map(id))
-                          // Client: allowedAccountIds
-                          
-                          if (!userProfile) return [];
-                          if (userProfile.role === 'admin') {
-                              return metaAccounts.map(a => a.account_id);
-                          } else {
-                              return allowedAccountIds;
-                          }
-                      } else if (normalizedSelected) {
-                          return [normalizedSelected];
-                      } else if (userProfile?.role !== 'admin') {
-                          // Fallback client
-                          return allowedAccountIds;
-                      }
-                      return []; // Admin no selection -> empty?
-                  })()}
+                  accountIds={
+                    selectedAccounts.length > 0
+                      ? selectedAccounts
+                      : isAdmin
+                      ? metaAccounts.map(a => a.account_id)
+                      : allowedAccountIds
+                  }
                 />
 
               )}
@@ -461,21 +447,25 @@ export default function App() {
                 <AdsTableView
                   data={filteredData}
                   onCampaignClick={(campaignName) => {
-                    setActiveView('campaigns');
+                    navigateTo('campaigns');
                   }}
                 />
               )}
               {activeView === 'creatives' && <CreativesView data={filteredData} />}
               {activeView === 'demographics' && <DemographicsGeoView data={filteredData} />}
-              {activeView === 'settings' && (userProfile?.role === 'admin') ? <SettingsView userRole={userProfile?.role} /> : activeView === 'settings' && (
-                <div className="flex h-[60vh] w-full items-center justify-center">
-                  <div className="flex max-w-md flex-col items-center text-center gap-4 p-8 bg-white rounded-2xl border border-slate-200">
-                    <Shield className="h-12 w-12 text-red-500 bg-red-50 p-3 rounded-full mb-2" />
-                    <h3 className="text-xl font-bold text-slate-900">Acesso Restrito</h3>
-                    <p className="text-slate-500">Seu perfil ({userProfile?.role}) não possui permissão para acessar as configurações.</p>
-                    <button onClick={() => setActiveView('dashboard')} className="mt-4 px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-lg">Voltar ao Dashboard</button>
-                  </div>
-                </div>
+              {activeView === 'settings' && (
+                canAccessView('settings')
+                  ? <SettingsView userRole={userProfile?.role} />
+                  : (
+                    <div className="flex h-[60vh] w-full items-center justify-center">
+                      <div className="flex max-w-md flex-col items-center text-center gap-4 p-8 bg-white rounded-2xl border border-slate-200">
+                        <Shield className="h-12 w-12 text-red-500 bg-red-50 p-3 rounded-full mb-2" />
+                        <h3 className="text-xl font-bold text-slate-900">Acesso Restrito</h3>
+                        <p className="text-slate-500">Seu perfil ({userProfile?.role}) não possui permissão para acessar as configurações.</p>
+                        <button onClick={() => navigateTo('dashboard')} className="mt-4 px-6 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-lg">Voltar ao Dashboard</button>
+                      </div>
+                    </div>
+                  )
               )}
             </Suspense>
 

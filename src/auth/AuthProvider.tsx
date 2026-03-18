@@ -1,12 +1,13 @@
 import React, { createContext, useState, useEffect, ReactNode, useCallback, useMemo } from 'react';
 import { supabase } from '../../services/supabaseService';
-import { UserProfile, UserRole, LocalSession } from './types';
+import { UserProfile, UserRole, LocalSession, ModulePermission } from './types';
 import { logger } from '../../lib/logger';
 
 export interface AuthContextType {
     session: LocalSession | null;
     userProfile: UserProfile | null;
     loading: boolean;
+    initializing: boolean;
     error: string | null;
     login: (email: string, password: string) => Promise<void>;
     logout: () => Promise<void>;
@@ -21,17 +22,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const [session, setSession] = useState<LocalSession | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(true);
+    const [initializing, setInitializing] = useState(true); // true até a sessão ser resolvida
     const [error, setError] = useState<string | null>(null);
 
     // ========== CARREGAR SESSÃO DO STORAGE ==========
-    const loadSessionFromStorage = useCallback(async () => {
-        let isMounted = true;
+    const loadSessionFromStorage = useCallback(async (signal?: AbortSignal) => {
         try {
             setLoading(true);
             const stored = localStorage.getItem(STORAGE_KEY);
-            
+
             if (!stored) {
-                if (isMounted) setLoading(false);
+                setLoading(false);
+                setInitializing(false);
                 return;
             }
 
@@ -44,31 +46,37 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
                 .eq('email', localSession.email)
                 .maybeSingle();
 
+            if (signal?.aborted) return;
+
             if (userError || !userData) {
                 logger.warn('Session invalid or user not found:', userError);
                 localStorage.removeItem(STORAGE_KEY);
-                if (isMounted) {
-                    setSession(null);
-                    setUserProfile(null);
-                }
+                setSession(null);
+                setUserProfile(null);
                 return;
             }
 
             // 2. Buscar permissões atualizadas da nova tabela relacional
-            const { data: accountsData, error: accountsError } = await (supabase.rpc as any)('get_user_assigned_accounts', { 
-                p_user_email: localSession.email 
+            const { data: accountsData, error: accountsError } = await (supabase.rpc as any)('get_user_assigned_accounts', {
+                p_user_email: localSession.email
             });
+
+            if (signal?.aborted) return;
 
             if (accountsError) {
                 logger.error('Error fetching user accounts', accountsError);
             }
 
-            // Converter para array de strings (garantindo que seja string[])
-            // O RPC retorna TABLE(account_id text), então data é [{ account_id: '...' }, ...]
-            // Mas o supabase JS client pode retornar direto se for configurado, vamos assumir o padrão
-            const assignedIds: string[] = accountsData 
-                ? (accountsData as any[]).map((a: any) => a.account_id) 
+            const assignedIds: string[] = accountsData
+                ? (accountsData as any[]).map((a: any) => a.account_id)
                 : [];
+
+            // 3. Buscar permissões de módulo
+            const { data: modulesData } = await (supabase.rpc as any)('get_user_module_permissions', {
+                p_user_email: localSession.email
+            });
+
+            const modulePermissions: ModulePermission[] = modulesData || [];
 
             // Montar perfil
             const pData = userData as any;
@@ -77,12 +85,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
                 email: pData.email,
                 name: pData.nome || pData.email.split('@')[0],
                 role: (pData.role as UserRole) || 'client',
-                assigned_account_ids: assignedIds, // Dados frescos da tabela relacional
-                permissions: pData.permissions || [],
+                is_active: pData.is_active ?? true,
+                assigned_account_ids: assignedIds,
+                module_permissions: modulePermissions,
+                permissions: pData.permissions || {},
                 created_at: pData.created_at,
             };
 
-            if (isMounted) {
+            if (!signal?.aborted) {
                 setSession(localSession);
                 setUserProfile(profile);
             }
@@ -91,7 +101,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             logger.error('Error loading session:', err);
             localStorage.removeItem(STORAGE_KEY);
         } finally {
-            if (isMounted) setLoading(false);
+            if (!signal?.aborted) {
+                setLoading(false);
+                setInitializing(false);
+            }
         }
     }, []);
 
@@ -124,10 +137,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
                 p_user_email: email 
             });
             
-            const assignedIds: string[] = accountsData 
-                ? (accountsData as any[]).map((a: any) => a.account_id) 
+            const assignedIds: string[] = accountsData
+                ? (accountsData as any[]).map((a: any) => a.account_id)
                 : [];
 
+            // Buscar permissões de módulo
+            const { data: modulesData } = await (supabase.rpc as any)('get_user_module_permissions', {
+                p_user_email: email
+            });
+            const modulePermissions: ModulePermission[] = modulesData || [];
 
             // Sucesso - Criar sessão local
             const newSession: LocalSession = {
@@ -141,8 +159,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
                 email: pData.email,
                 name: pData.nome || pData.email.split('@')[0],
                 role: (pData.role as UserRole) || 'client',
-                assigned_account_ids: assignedIds, // Fonte da verdade
-                permissions: pData.permissions || [],
+                is_active: pData.is_active ?? true,
+                assigned_account_ids: assignedIds,
+                module_permissions: modulePermissions,
+                permissions: pData.permissions || {},
                 created_at: pData.created_at,
             };
 
@@ -175,18 +195,36 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     // ========== EFEITOS ==========
     useEffect(() => {
-        loadSessionFromStorage();
+        const controller = new AbortController();
+        loadSessionFromStorage(controller.signal);
+        return () => controller.abort();
     }, [loadSessionFromStorage]);
 
     const value: AuthContextType = useMemo(() => ({
         session,
         userProfile,
         loading,
+        initializing,
         error,
         login,
         logout,
         clearError,
-    }), [session, userProfile, loading, error]);
+    }), [session, userProfile, loading, initializing, error]);
+
+    // Bloqueia render de filhos até a sessão estar resolvida
+    if (initializing) {
+        return (
+            <div className="flex h-screen items-center justify-center bg-slate-50">
+                <div className="flex flex-col items-center gap-3">
+                    <svg className="h-10 w-10 animate-spin text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <p className="text-sm font-medium text-slate-500">Carregando...</p>
+                </div>
+            </div>
+        );
+    }
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
