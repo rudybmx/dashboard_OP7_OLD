@@ -75,7 +75,11 @@ export const SummaryView: React.FC<SummaryViewProps> = ({ summaryData, loading }
     dashboardTitle = `Visão Consolidada: ${clsName}`;
     dashboardSubtitle = 'Métricas somadas do Grupo e detalhamento por contas.';
   } else if (selectedAccounts.length === 1) {
-    const accName = summaryData.length > 0 ? summaryData[0].nome_conta : selectedAccounts[0];
+    const selectedId = selectedAccounts[0].replace(/^act_/i, '');
+    const matchedRow = summaryData.find(r =>
+      r.meta_account_id?.replace(/^act_/i, '') === selectedId
+    );
+    const accName = matchedRow?.nome_conta?.trim() || summaryData[0]?.nome_conta || selectedAccounts[0];
     dashboardTitle = `Visão Geral: ${accName}`;
     dashboardSubtitle = 'Métricas exclusivas desta conta.';
   } else if (selectedAccounts.length > 1) {

@@ -1,34 +1,39 @@
-import React, { useState } from 'react';
-import { 
-  Plus, 
-  Trash2, 
-  Search, 
-  User, 
-  Shield, 
-  Mail, 
-  Store, 
+import React, { useState, useMemo } from 'react';
+import {
+  Plus,
+  Trash2,
+  Search,
+  User,
+  Shield,
+  Mail,
+  Store,
   LayoutList,
   Edit,
   X,
   Check,
   AlertCircle,
   Loader2,
-  Lock
+  Lock,
+  Folder
 } from 'lucide-react';
 import * as userService from '../services/userService';
 import { UserProfile, UserFormData, UserRole } from '../types';
 import { useSettingsData } from '../context/SettingsDataContext';
+import { useClusters } from '../src/entities/cluster';
 
 export const UsersSettingsTab: React.FC = () => {
     // Data from Context
-    const { 
-        users, 
+    const {
+        users,
         setUsers,
         accounts,
         usersLoading: loading,
         isDataLoaded,
         refreshUsers
     } = useSettingsData();
+
+    // Groups from client_groups
+    const { data: groups = [] } = useClusters();
 
     // Filter/UI States
     const [searchTerm, setSearchTerm] = useState('');
@@ -126,17 +131,65 @@ export const UsersSettingsTab: React.FC = () => {
     const toggleArraySelection = (arrayName: 'assigned_account_ids', value: string, single: boolean = false) => {
         setFormData(prev => {
             const current = prev[arrayName] || [];
-            
-            if (single) {
-                return { ...prev, [arrayName]: [value] };
-            }
+            if (single) return { ...prev, [arrayName]: [value] };
+            if (current.includes(value)) return { ...prev, [arrayName]: current.filter(id => id !== value) };
+            return { ...prev, [arrayName]: [...current, value] };
+        });
+    };
 
-            if (current.includes(value)) {
-                return { ...prev, [arrayName]: current.filter(id => id !== value) };
+    /**
+     * Toggle a group selection:
+     * - Checking a group → add all its account_ids to assigned_account_ids (dedup)
+     * - Unchecking a group → remove only accounts that belong exclusively to that group
+     */
+    const toggleGroupSelection = (groupId: string) => {
+        const group = groups.find(g => g.id === groupId);
+        if (!group) return;
+        const groupAccountIds = (group.cluster_accounts || []).map(ca => ca.account_id);
+        const allGroupsAccountIds = (id: string) =>
+            groups.some(g => g.id !== groupId && (g.cluster_accounts || []).some(ca => ca.account_id === id));
+
+        setFormData(prev => {
+            const current = prev.assigned_account_ids || [];
+            const isSelected = isGroupSelected(groupId, current);
+
+            if (isSelected) {
+                // Remove accounts that belong only to this group (not in other selected groups)
+                const selectedGroupIds = groups
+                    .filter(g => g.id !== groupId && isGroupSelected(g.id, current))
+                    .map(g => g.id);
+                const accountsInOtherSelectedGroups = new Set(
+                    groups
+                        .filter(g => selectedGroupIds.includes(g.id))
+                        .flatMap(g => (g.cluster_accounts || []).map(ca => ca.account_id))
+                );
+                return {
+                    ...prev,
+                    assigned_account_ids: current.filter(id =>
+                        !groupAccountIds.includes(id) || accountsInOtherSelectedGroups.has(id)
+                    )
+                };
             } else {
-                return { ...prev, [arrayName]: [...current, value] };
+                // Add all accounts from this group (dedup)
+                const merged = Array.from(new Set([...current, ...groupAccountIds]));
+                return { ...prev, assigned_account_ids: merged };
             }
         });
+    };
+
+    /** A group is "selected" if ALL its accounts are in the assigned list */
+    const isGroupSelected = (groupId: string, accountIds: string[]): boolean => {
+        const group = groups.find(g => g.id === groupId);
+        if (!group || !group.cluster_accounts?.length) return false;
+        return group.cluster_accounts.every(ca => accountIds.includes(ca.account_id));
+    };
+
+    /** A group is "indeterminate" if SOME (not all) accounts are selected */
+    const isGroupIndeterminate = (groupId: string, accountIds: string[]): boolean => {
+        const group = groups.find(g => g.id === groupId);
+        if (!group || !group.cluster_accounts?.length) return false;
+        const selectedCount = group.cluster_accounts.filter(ca => accountIds.includes(ca.account_id)).length;
+        return selectedCount > 0 && selectedCount < group.cluster_accounts.length;
     };
 
     const handleOpenPasswordModal = (user: UserProfile) => {
@@ -368,46 +421,82 @@ export const UsersSettingsTab: React.FC = () => {
                                         </select>
                                     </div>
 
-                                    {/* Conditional Account Select for Clients */}
+                                    {/* Agrupamentos + Contas for Clients */}
                                     {formData.role === 'client' && (
-                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 max-h-64 flex flex-col">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <label className="text-xs font-bold text-indigo-600 uppercase flex items-center gap-1">
-                                                    <LayoutList size={14} /> Contas Permitidas
-                                                </label>
-                                                <div className="relative w-1/2">
-                                                    <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
-                                                    <input 
-                                                        type="text"
-                                                        placeholder="Filtrar contas..."
-                                                        className="w-full pl-7 pr-2 py-1 text-xs border border-slate-200 rounded-md focus:outline-none focus:border-indigo-500"
-                                                        value={accountSearchTerm}
-                                                        onChange={e => setAccountSearchTerm(e.target.value)}
-                                                    />
-                                                </div>
-                                            </div>
-                                            
-                                            <div className="overflow-y-auto flex-1 space-y-2 pr-1">
-                                                {accounts.length === 0 ? <p className="text-xs text-slate-400">Nenhuma conta disponível.</p> : (
-                                                    <div className="space-y-2">
-                                                        {accounts
-                                                            .filter(acc => acc.account_name.toLowerCase().includes(accountSearchTerm.toLowerCase()))
-                                                            .map(acc => (
-                                                            <label key={acc.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:text-indigo-600">
-                                                                <input 
-                                                                    type="checkbox"
-                                                                    checked={formData.assigned_account_ids.includes(acc.id)}
-                                                                    onChange={() => toggleArraySelection('assigned_account_ids', acc.id, false)}
-                                                                    className="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
-                                                                />
-                                                                <span className="truncate">{acc.account_name}</span>
-                                                            </label>
-                                                        ))}
-                                                        {accounts.filter(acc => acc.account_name.toLowerCase().includes(accountSearchTerm.toLowerCase())).length === 0 && (
-                                                            <p className="text-xs text-slate-400 py-2 text-center">Nenhuma conta encontrada para "{accountSearchTerm}"</p>
-                                                        )}
+                                        <div className="space-y-3">
+                                            {/* Agrupamentos Permitidos */}
+                                            {groups.length > 0 && (
+                                                <div className="bg-indigo-50/60 p-3 rounded-xl border border-indigo-100">
+                                                    <label className="text-xs font-bold text-indigo-700 uppercase flex items-center gap-1 mb-2">
+                                                        <Folder size={13} /> Agrupamentos Permitidos
+                                                    </label>
+                                                    <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                                                        {groups.map(group => {
+                                                            const selected = isGroupSelected(group.id, formData.assigned_account_ids);
+                                                            const indeterminate = !selected && isGroupIndeterminate(group.id, formData.assigned_account_ids);
+                                                            const count = group.cluster_accounts?.length ?? 0;
+                                                            return (
+                                                                <label key={group.id} className="flex items-center gap-2 text-sm cursor-pointer hover:text-indigo-700">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={selected}
+                                                                        ref={el => { if (el) el.indeterminate = indeterminate; }}
+                                                                        onChange={() => toggleGroupSelection(group.id)}
+                                                                        className="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                                                                    />
+                                                                    <span className={`truncate flex-1 ${selected ? 'text-indigo-800 font-medium' : 'text-slate-700'}`}>
+                                                                        {group.name}
+                                                                    </span>
+                                                                    <span className="text-xs text-slate-400 shrink-0">{count} conta{count !== 1 ? 's' : ''}</span>
+                                                                </label>
+                                                            );
+                                                        })}
                                                     </div>
-                                                )}
+                                                </div>
+                                            )}
+
+                                            {/* Contas Permitidas individuais */}
+                                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 max-h-52 flex flex-col">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <label className="text-xs font-bold text-slate-600 uppercase flex items-center gap-1">
+                                                        <LayoutList size={13} /> Contas Permitidas
+                                                        <span className="ml-1 text-indigo-600 font-semibold">
+                                                            ({formData.assigned_account_ids.length})
+                                                        </span>
+                                                    </label>
+                                                    <div className="relative w-1/2">
+                                                        <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Filtrar contas..."
+                                                            className="w-full pl-7 pr-2 py-1 text-xs border border-slate-200 rounded-md focus:outline-none focus:border-indigo-500"
+                                                            value={accountSearchTerm}
+                                                            onChange={e => setAccountSearchTerm(e.target.value)}
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="overflow-y-auto flex-1 space-y-1.5 pr-1">
+                                                    {accounts
+                                                        .filter(acc => (acc.display_name || acc.account_name || '').toLowerCase().includes(accountSearchTerm.toLowerCase()))
+                                                        .map(acc => {
+                                                            const displayName = (acc.display_name?.trim() || acc.account_name) ?? acc.id;
+                                                            return (
+                                                                <label key={acc.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:text-indigo-600">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={formData.assigned_account_ids.includes(acc.id)}
+                                                                        onChange={() => toggleArraySelection('assigned_account_ids', acc.id, false)}
+                                                                        className="rounded text-indigo-600 focus:ring-indigo-500 border-slate-300"
+                                                                    />
+                                                                    <span className="truncate">{displayName}</span>
+                                                                </label>
+                                                            );
+                                                        })
+                                                    }
+                                                    {accounts.filter(acc => (acc.display_name || acc.account_name || '').toLowerCase().includes(accountSearchTerm.toLowerCase())).length === 0 && (
+                                                        <p className="text-xs text-slate-400 py-2 text-center">Nenhuma conta encontrada</p>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
                                     )}

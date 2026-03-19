@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useClusters, useManageClusters, useClusterAccounts } from '../../../entities/cluster';
 import { useSettingsData } from '../../../../context/SettingsDataContext';
-import { Folder, Plus, Trash2, CheckSquare, Square, Loader2 } from 'lucide-react';
+import { Folder, Plus, Trash2, CheckSquare, Square, Loader2, Save, X } from 'lucide-react';
 
 export const AccountGroupsTab: React.FC = () => {
     const { data: clusters = [], isLoading: isLoadingClusters } = useClusters();
@@ -11,18 +11,50 @@ export const AccountGroupsTab: React.FC = () => {
     const [newGroupName, setNewGroupName] = useState('');
     const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null);
     const [isCreating, setIsCreating] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
+
+    // Local pending state — only sent to DB on "Salvar"
+    const [pendingAccountIds, setPendingAccountIds] = useState<string[] | null>(null);
+    const [isDirty, setIsDirty] = useState(false);
 
     const selectedCluster = clusters.find(c => c.id === selectedClusterId);
     const { data: clusterAccounts = [], isLoading: isLoadingAccounts } = useClusterAccounts(selectedClusterId);
-    const linkedAccountIds = clusterAccounts.map(ca => ca.account_id);
+
+    // When a cluster is selected or its accounts load, reset local pending state
+    useEffect(() => {
+        if (clusterAccounts) {
+            setPendingAccountIds(clusterAccounts.map(ca => ca.account_id));
+            setIsDirty(false);
+        }
+    }, [selectedClusterId, clusterAccounts.map(c => c.account_id).join(',')]);
+
+    const displayedAccountIds = pendingAccountIds ?? clusterAccounts.map(ca => ca.account_id);
 
     const handleToggleAccount = (accountId: string) => {
-        if (!selectedClusterId) return;
-        const newLinkedIds = linkedAccountIds.includes(accountId)
-            ? linkedAccountIds.filter(id => id !== accountId)
-            : [...linkedAccountIds, accountId];
-        linkAccounts.mutate({ clusterId: selectedClusterId, accountIds: newLinkedIds });
+        setPendingAccountIds(prev => {
+            const current = prev ?? [];
+            return current.includes(accountId)
+                ? current.filter(id => id !== accountId)
+                : [...current, accountId];
+        });
+        setIsDirty(true); // Must be outside the updater function
+    };
+
+    const handleSave = async () => {
+        if (!selectedClusterId || pendingAccountIds === null) return;
+        setIsSaving(true);
+        try {
+            await linkAccounts.mutateAsync({ clusterId: selectedClusterId, accountIds: pendingAccountIds });
+            setIsDirty(false);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleDiscard = () => {
+        setPendingAccountIds(clusterAccounts.map(ca => ca.account_id));
+        setIsDirty(false);
     };
 
     const handleCreateCluster = async (e: React.FormEvent) => {
@@ -39,11 +71,31 @@ export const AccountGroupsTab: React.FC = () => {
 
     const handleDeleteCluster = async (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
-        if (window.confirm('Tem certeza que deseja deletar este grupo? Ele será removido com todas as vinculações.')) {
-            await deleteCluster.mutateAsync(id);
-            if (selectedClusterId === id) setSelectedClusterId(null);
+        if (!window.confirm('Deletar este grupo? As contas serão desvinculadas mas não excluídas.')) return;
+        await deleteCluster.mutateAsync(id);
+        if (selectedClusterId === id) {
+            setSelectedClusterId(null);
+            setPendingAccountIds(null);
         }
     };
+
+    const handleSelectCluster = (id: string) => {
+        if (isDirty && !window.confirm('Há alterações não salvas. Deseja descartar?')) return;
+        setSelectedClusterId(id);
+        setSearchTerm('');
+    };
+
+    const visibleAccounts = accounts
+        .filter(a => a.status !== 'removed' && a.client_visibility !== false)
+        .filter(a => {
+            if (!searchTerm) return true;
+            const s = searchTerm.toLowerCase();
+            return (
+                (a.display_name || '').toLowerCase().includes(s) ||
+                (a.account_name || '').toLowerCase().includes(s) ||
+                (a.account_id || '').includes(s)
+            );
+        });
 
     if (isLoadingClusters) {
         return (
@@ -55,9 +107,9 @@ export const AccountGroupsTab: React.FC = () => {
 
     return (
         <div className="space-y-6 animate-in fade-in duration-300">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex h-[600px]">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex h-[620px]">
 
-                {/* Left Panel: List of Clusters */}
+                {/* ── Left Panel: Group List ── */}
                 <div className="w-1/3 border-r border-slate-200 flex flex-col bg-slate-50/50">
                     <div className="p-4 border-b border-slate-200">
                         <h3 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
@@ -69,7 +121,7 @@ export const AccountGroupsTab: React.FC = () => {
                                 placeholder="Novo grupo..."
                                 className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                                 value={newGroupName}
-                                onChange={(e) => setNewGroupName(e.target.value)}
+                                onChange={e => setNewGroupName(e.target.value)}
                             />
                             <button
                                 type="submit"
@@ -82,99 +134,121 @@ export const AccountGroupsTab: React.FC = () => {
                     </div>
 
                     <div className="overflow-y-auto flex-1 p-2 space-y-1">
-                        {clusters.map(cluster => (
-                            <div
-                                key={cluster.id}
-                                onClick={() => setSelectedClusterId(cluster.id)}
-                                className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors ${
-                                    selectedClusterId === cluster.id
-                                        ? 'bg-indigo-50 border-indigo-200 border'
-                                        : 'hover:bg-slate-100 border border-transparent'
-                                }`}
-                            >
-                                <span className="font-medium text-sm text-slate-700 truncate">{cluster.name}</span>
-                                <button
-                                    onClick={(e) => handleDeleteCluster(e, cluster.id)}
-                                    className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 flex items-center justify-center rounded-md transition-colors"
+                        {clusters.map(cluster => {
+                            const count = cluster.cluster_accounts?.length ?? 0;
+                            return (
+                                <div
+                                    key={cluster.id}
+                                    onClick={() => handleSelectCluster(cluster.id)}
+                                    className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors ${
+                                        selectedClusterId === cluster.id
+                                            ? 'bg-indigo-50 border-indigo-200 border'
+                                            : 'hover:bg-slate-100 border border-transparent'
+                                    }`}
                                 >
-                                    <Trash2 size={14} />
-                                </button>
-                            </div>
-                        ))}
+                                    <div className="min-w-0">
+                                        <span className="font-medium text-sm text-slate-700 truncate block">{cluster.name}</span>
+                                        <span className="text-xs text-slate-400">{count} conta{count !== 1 ? 's' : ''}</span>
+                                    </div>
+                                    <button
+                                        onClick={e => handleDeleteCluster(e, cluster.id)}
+                                        className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 flex items-center justify-center rounded-md transition-colors shrink-0"
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
+                                </div>
+                            );
+                        })}
                         {clusters.length === 0 && (
                             <p className="text-xs text-slate-500 text-center py-6">Nenhum grupo criado</p>
                         )}
                     </div>
                 </div>
 
-                {/* Right Panel: Accounts Assignment */}
+                {/* ── Right Panel: Account Assignment ── */}
                 <div className="flex-1 flex flex-col bg-white">
                     {selectedCluster ? (
                         <>
-                            <div className="p-6 border-b border-slate-100 flex flex-col gap-4">
-                                <div>
-                                    <h3 className="text-lg font-bold text-slate-800">Contas do grupo: {selectedCluster.name}</h3>
-                                    <p className="text-sm text-slate-500">Selecione as contas que pertencem a este grupo.</p>
+                            <div className="p-5 border-b border-slate-100 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <h3 className="text-base font-bold text-slate-800">
+                                            Contas: <span className="text-indigo-700">{selectedCluster.name}</span>
+                                        </h3>
+                                        <p className="text-xs text-slate-500">Marque as contas que pertencem a este grupo e clique em Salvar.</p>
+                                    </div>
+                                    <span className="px-3 py-1 bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-semibold rounded-full">
+                                        {displayedAccountIds.length} selecionada{displayedAccountIds.length !== 1 ? 's' : ''}
+                                    </span>
                                 </div>
-                                <div className="flex items-center gap-4">
+
+                                <div className="flex items-center gap-3">
                                     <input
                                         type="text"
                                         placeholder="Buscar por nome ou ID..."
                                         value={searchTerm}
-                                        onChange={(e) => setSearchTerm(e.target.value)}
-                                        className="flex-1 px-4 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                                        onChange={e => setSearchTerm(e.target.value)}
+                                        className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                                     />
-                                    <div className="px-3 py-1.5 bg-indigo-50 border border-indigo-100 text-indigo-700 text-sm font-medium rounded-full shrink-0">
-                                        {linkedAccountIds.length} contas selecionadas
-                                    </div>
+
+                                    {isDirty && (
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                onClick={handleDiscard}
+                                                className="px-3 py-2 text-sm text-slate-500 hover:text-slate-700 border border-slate-200 rounded-lg transition-colors flex items-center gap-1"
+                                            >
+                                                <X size={14} /> Descartar
+                                            </button>
+                                            <button
+                                                onClick={handleSave}
+                                                disabled={isSaving}
+                                                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60 transition-colors flex items-center gap-1 font-medium"
+                                            >
+                                                {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                                                Salvar
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
-                            <div className="flex-1 overflow-y-auto p-6">
+                            <div className="flex-1 overflow-y-auto p-5">
                                 {isLoadingAccounts ? (
                                     <div className="flex items-center justify-center p-8">
                                         <Loader2 className="animate-spin text-slate-400" />
                                     </div>
                                 ) : (
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                        {accounts
-                                            .filter(a => a.status !== 'removed' && a.client_visibility !== false)
-                                            .filter(a => {
-                                                const search = searchTerm.toLowerCase();
-                                                const name1 = (a.display_name || '').toLowerCase();
-                                                const name2 = (a.account_name || '').toLowerCase();
-                                                const id = (a.account_id || '').toLowerCase();
-                                                return search === '' || name1.includes(search) || name2.includes(search) || id.includes(search);
-                                            })
-                                            .map(account => {
-                                                const isLinked = linkedAccountIds.includes(account.account_id);
-                                                const displayName = account.display_name?.trim() || account.account_name || 'Conta sem nome';
-
-                                                return (
-                                                    <div
-                                                        key={account.account_id}
-                                                        onClick={() => handleToggleAccount(account.account_id)}
-                                                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                                                            isLinked
-                                                                ? 'border-indigo-600 bg-indigo-50/50 shadow-sm'
-                                                                : 'border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
-                                                        }`}
-                                                    >
-                                                        <div className="mt-0.5">
-                                                            {isLinked
-                                                                ? <CheckSquare className="text-indigo-600" size={18} />
-                                                                : <Square className="text-slate-300" size={18} />
-                                                            }
-                                                        </div>
-                                                        <div className="min-w-0 flex-1">
-                                                            <p className={`text-sm font-medium line-clamp-2 leading-tight ${isLinked ? 'text-indigo-900' : 'text-slate-700'}`} title={displayName}>
-                                                                {displayName}
-                                                            </p>
-                                                            <p className="text-xs text-slate-400 font-mono mt-1 break-all">{account.account_id}</p>
-                                                        </div>
+                                        {visibleAccounts.map(account => {
+                                            const isLinked = displayedAccountIds.includes(account.account_id);
+                                            const displayName = account.display_name?.trim() || account.account_name || 'Conta sem nome';
+                                            return (
+                                                <div
+                                                    key={account.account_id}
+                                                    onClick={() => handleToggleAccount(account.account_id)}
+                                                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all select-none ${
+                                                        isLinked
+                                                            ? 'border-indigo-500 bg-indigo-50/50 shadow-sm'
+                                                            : 'border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
+                                                    }`}
+                                                >
+                                                    <div className="mt-0.5 shrink-0">
+                                                        {isLinked
+                                                            ? <CheckSquare className="text-indigo-600" size={18} />
+                                                            : <Square className="text-slate-300" size={18} />}
                                                     </div>
-                                                );
-                                            })}
+                                                    <div className="min-w-0 flex-1">
+                                                        <p className={`text-sm font-medium line-clamp-2 leading-tight ${isLinked ? 'text-indigo-900' : 'text-slate-700'}`}>
+                                                            {displayName}
+                                                        </p>
+                                                        <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">{account.account_id}</p>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                        {visibleAccounts.length === 0 && (
+                                            <p className="col-span-3 text-center text-sm text-slate-400 py-8">Nenhuma conta encontrada</p>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -182,7 +256,7 @@ export const AccountGroupsTab: React.FC = () => {
                     ) : (
                         <div className="flex-1 flex flex-col items-center justify-center text-slate-400 space-y-3">
                             <Folder size={48} className="text-slate-200" />
-                            <p>Selecione ou crie um grupo ao lado</p>
+                            <p className="text-sm">Selecione ou crie um grupo ao lado</p>
                         </div>
                     )}
                 </div>

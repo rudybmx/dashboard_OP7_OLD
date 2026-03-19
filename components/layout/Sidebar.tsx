@@ -35,20 +35,25 @@ const LEGACY_VISIBLE: Record<string, ActiveView[]> = {
   superadmin: ['summary', 'dashboard', 'executive', 'planning', 'campaigns', 'ads', 'creatives', 'demographics', 'settings'],
   admin:      ['summary', 'dashboard', 'executive', 'planning', 'campaigns', 'ads', 'creatives', 'demographics', 'settings'],
   manager:    ['summary', 'dashboard', 'executive', 'campaigns', 'ads', 'creatives', 'demographics'],
-  client:     ['summary', 'dashboard'],
-  viewer:     ['summary'],
+  client:     ['summary', 'dashboard', 'executive', 'planning', 'campaigns', 'ads', 'creatives', 'demographics'],
+  viewer:     ['summary', 'dashboard'],
 };
 
 export function Sidebar({ className, activeView, setActiveView, isDemoMode, userRole, userName, userEmail }: SidebarProps) {
   const { logout, userProfile } = useAuth();
   const { canAccessModule, allowedRoutes } = useUserAccess(userProfile ?? null);
 
+  // module_permissions só substitui o fallback de role se de fato liberar ao menos 1 item.
+  // Caso existam permissões mas nenhuma coincida com os moduleIds do NAV, usa o mapa legado de role.
+  const hasModuleVisibleItems =
+    (userProfile?.module_permissions?.length ?? 0) > 0 &&
+    NAV_ITEMS.some(item => item.moduleIds.some(mid => canAccessModule(mid)));
+
   const isVisible = (item: typeof NAV_ITEMS[0]): boolean => {
-    // Se há permissões de módulo carregadas, usa elas
-    if (userProfile?.module_permissions?.length) {
+    if (hasModuleVisibleItems) {
       return item.moduleIds.some(mid => canAccessModule(mid));
     }
-    // Fallback legado
+    // Fallback legado por role
     const role = userRole ?? 'viewer';
     return (LEGACY_VISIBLE[role] ?? []).includes(item.view);
   };

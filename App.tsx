@@ -356,6 +356,16 @@ export default function App() {
     });
   }, [selectedAccounts, data]);
 
+  // Client-side safety filter for summaryData (RPC may return all accounts if filter not applied)
+  const filteredSummaryData = useMemo(() => {
+    if (selectedAccounts.length === 0) return summaryData;
+    const selectedSet = new Set(selectedAccounts.map(id => id.replace(/^act_/i, '')));
+    return summaryData.filter(row => {
+      const accId = (row.meta_account_id || '').replace(/^act_/i, '');
+      return selectedSet.has(accId) || selectedSet.has(row.meta_account_id);
+    });
+  }, [summaryData, selectedAccounts]);
+
   const comparisonData = useMemo(() => {
     if (selectedAccounts.length === 0) return formattedComparisonData;
     const selectedSet = new Set(selectedAccounts.map(id => id.replace(/^act_/i, '')));
@@ -392,13 +402,13 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-full bg-slate-50 overflow-hidden">
-      <aside className="hidden lg:flex w-72 flex-col border-r bg-card h-full">
+      <aside className="hidden md:flex w-72 flex-col border-r bg-card h-full">
         <Sidebar activeView={activeView} setActiveView={navigateTo} isDemoMode={isDemoMode} userRole={userProfile?.role} userName={userProfile?.name} userEmail={userProfile?.email} className="border-none h-full" />
       </aside>
 
       <div className="flex flex-1 flex-col overflow-hidden h-full">
         <header className="relative z-50 flex-none">
-          <div className="lg:hidden p-4 bg-white border-b flex items-center justify-between">
+          <div className="md:hidden p-4 bg-white border-b flex items-center justify-between">
             <MobileNav activeView={activeView} setActiveView={navigateTo} isDemoMode={isDemoMode} />
             <span className="font-bold">OP7 PERFORMANCE</span>
           </div>
@@ -423,7 +433,7 @@ export default function App() {
             <Suspense fallback={<ViewLoader />}>
               {activeView === 'summary' && (
                 <SummaryView
-                  summaryData={summaryData}
+                  summaryData={filteredSummaryData}
                   loading={loading && !isDataLoaded}
                 />
               )}
