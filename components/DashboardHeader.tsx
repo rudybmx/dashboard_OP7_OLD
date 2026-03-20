@@ -81,14 +81,24 @@ const UnitsDropdown: React.FC<{
           </div>
 
           {/* "All accounts" option */}
-          <div
-            onClick={() => { onSelectAll(); setOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 cursor-pointer text-sm font-semibold border-b border-slate-100 ${
-              allSelected ? 'bg-orange-500 text-white' : 'text-slate-700 hover:bg-slate-50'
-            }`}
-          >
-            {allSelected && <span className="text-white">✓</span>}
-            <span>Todas as contas ({accounts.length})</span>
+          <div className="flex items-center border-b border-slate-100">
+            <div
+              onClick={() => { onSelectAll(); setOpen(false); }}
+              className={`flex-1 flex items-center gap-3 px-4 py-3 cursor-pointer text-sm font-semibold ${
+                allSelected ? 'bg-orange-500 text-white' : 'text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              {allSelected && <span className="text-white">✓</span>}
+              <span>Todas as contas ({accounts.length})</span>
+            </div>
+            {!allSelected && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onSelectAll(); }}
+                className="px-4 py-3 text-xs font-bold text-orange-500 hover:bg-orange-50 transition-colors uppercase border-l border-slate-100"
+              >
+                Limpar
+              </button>
+            )}
           </div>
 
           {/* Account list */}
