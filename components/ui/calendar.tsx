@@ -349,8 +349,8 @@ export const Calendar = ({
 
   const getDaysArray = (date: Date) => {
     const days = [];
-    let day = startOfWeek(startOfMonth(date), { weekStartsOn: 1 });
-    const end = endOfWeek(endOfMonth(date), { weekStartsOn: 1 });
+    let day = startOfWeek(startOfMonth(date), { weekStartsOn: 0 });
+    const end = endOfWeek(endOfMonth(date), { weekStartsOn: 0 });
     while (day <= end) {
       days.push(day);
       day = addDays(day, 1);

@@ -81,7 +81,7 @@ export const useManageClusters = () => {
         mutationFn: async (name: string) => {
             const { data, error } = await (supabase as any)
                 .from('client_groups')
-                .insert({ name, type: 'custom', is_active: true })
+                .insert({ name, type: 'other', is_active: true })
                 .select('id, name, created_at')
                 .single();
             if (error) throw new Error(error.message);
